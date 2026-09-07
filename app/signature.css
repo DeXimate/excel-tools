@@ -1,0 +1,193 @@
+.credit {
+  color: #66716b !important;
+  font: 400 10px Arial, Helvetica, sans-serif !important;
+  letter-spacing: .02em !important;
+}
+
+.credit strong {
+  display: inline-block;
+  margin-left: 7px;
+  color: #0d684c;
+  font: italic 700 20px "Segoe Script", "Brush Script MT", cursive;
+  letter-spacing: -.8px;
+  transform: rotate(-2deg);
+}
+
+.brand small {
+  margin-left: 5px;
+  color: #0d684c;
+  font: italic 700 15px "Segoe Script", "Brush Script MT", cursive;
+  letter-spacing: -.5px;
+}
+
+.primary {
+  position: relative;
+  overflow: hidden;
+  transition: transform 140ms ease, box-shadow 140ms ease, background 140ms ease;
+}
+
+.primary::after {
+  content: "";
+  position: absolute;
+  inset: 50%;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, .3);
+  opacity: 0;
+  transform: scale(0);
+}
+
+.primary:active {
+  transform: translateY(2px) scale(.985);
+  box-shadow: 0 2px 7px rgba(13, 104, 76, .22);
+}
+
+.primary:active::after {
+  inset: -60%;
+  opacity: 1;
+  transform: scale(1);
+  transition: transform 320ms ease, opacity 400ms ease;
+}
+
+.tabs button {
+  transition: color 160ms ease, background 160ms ease, transform 120ms ease;
+}
+
+.tabs button:active,
+.chips button:active,
+.radio button:active {
+  transform: scale(.96);
+}
+
+.liveStats {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  margin-top: 20px;
+  padding: 13px 16px;
+  border: 1px solid #cfe5d8;
+  border-radius: 9px;
+  color: #52665c;
+  background: #f2faf5;
+  font-size: 12px;
+  transition: all 180ms ease;
+}
+
+.liveStats strong {
+  color: #0d684c;
+  font-size: 15px;
+}
+
+.liveStats i {
+  width: 1px;
+  height: 22px;
+  background: #cfe0d6;
+}
+
+@media (max-width: 560px) {
+  .liveStats { gap: 10px; font-size: 10px; }
+  .liveStats strong { font-size: 13px; }
+}
+
+.dropzone {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  transition: border-color 220ms ease, background 220ms ease, transform 220ms ease, box-shadow 220ms ease;
+}
+
+.dropzone::before {
+  content: "";
+  position: absolute;
+  left: var(--mouse-x, 50%);
+  top: var(--mouse-y, 50%);
+  z-index: 0;
+  width: 190px;
+  height: 190px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(71, 183, 132, .17), rgba(103, 201, 157, .07) 36%, transparent 70%);
+  opacity: 0;
+  transform: translate(-50%, -50%) scale(.72);
+  pointer-events: none;
+  transition: opacity 220ms ease, transform 260ms ease;
+}
+
+.dropzone > * {
+  position: relative;
+  z-index: 1;
+}
+
+.dropzone:hover::before,
+.dropzone.dragging::before,
+.dropzone.isLoading::before {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1.12);
+}
+
+.dropzone:hover {
+  box-shadow: inset 0 0 0 1px rgba(13, 104, 76, .08), 0 12px 30px rgba(13, 104, 76, .08);
+}
+
+.dropzone.dragging {
+  border-style: solid;
+  box-shadow: inset 0 0 0 2px rgba(13, 104, 76, .16), 0 15px 35px rgba(13, 104, 76, .12);
+}
+
+.uploadIcon {
+  position: relative;
+  transition: transform 220ms ease, background 220ms ease, box-shadow 220ms ease;
+}
+
+.dropzone:hover .uploadIcon,
+.dropzone.dragging .uploadIcon {
+  transform: none;
+  background: #ccebdc;
+  box-shadow: none;
+}
+
+.dropzone:hover .arrow {
+  display: inline-block;
+  animation: none;
+}
+
+.uploadIcon.loading {
+  background: #0d684c;
+  box-shadow: 0 0 0 8px rgba(13, 104, 76, .08);
+  animation: loaderPulse 1.45s ease-in-out infinite;
+}
+
+.spinner {
+  width: 22px;
+  height: 22px;
+  border: 2px solid rgba(255, 255, 255, .35);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 700ms linear infinite;
+}
+
+.loadingTrack {
+  width: min(240px, 66%);
+  height: 4px;
+  margin-top: 22px;
+  overflow: hidden;
+  border-radius: 99px;
+  background: #dce9e1;
+}
+
+.loadingTrack span {
+  display: block;
+  width: 42%;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #0d684c, #55b88f);
+  animation: loadingSweep 1.15s ease-in-out infinite;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes arrowBounce { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
+@keyframes loaderPulse { 0%, 100% { box-shadow: 0 0 0 7px rgba(13,104,76,.07); } 50% { box-shadow: 0 0 0 13px rgba(13,104,76,.02); } }
+@keyframes loadingSweep { 0% { transform: translateX(-110%); } 100% { transform: translateX(350%); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .dropzone *, .dropzone::before { animation: none !important; transition: none !important; }
+}
