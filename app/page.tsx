@@ -12,6 +12,7 @@ type ModeWorkspace = {
   leftKey: string;
   rightKey: string;
   joinParts: JoinParts;
+  outputColumns: string[] | null;
   message: string;
 };
 const accepted = '.xlsx,.xls,.csv';
@@ -27,6 +28,24 @@ async function readExcel(file: File): Promise<TableFile> {
 function saveWorkbook(rows: Record<string, unknown>[], name: string, headers?: string[]) {
   const sheet = XLSX.utils.json_to_sheet(rows, headers ? { header: headers } : undefined);
   const book = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(book, sheet, 'Résultat'); XLSX.writeFile(book, name);
+}
+
+const normalize = (value: unknown) => String(value ?? '').trim().toLocaleLowerCase('fr').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '');
+function suggestJoinKeys(left: TableFile, right: TableFile) {
+  let best = { left: left.headers[0] ?? '', right: right.headers[0] ?? '', score: -1 };
+  for (const leftHeader of left.headers) for (const rightHeader of right.headers) {
+    const leftName = normalize(leftHeader); const rightName = normalize(rightHeader);
+    const nameScore = leftName === rightName ? 80 : leftName.includes(rightName) || rightName.includes(leftName) ? 35 : 0;
+    const rightValues = new Set(right.rows.slice(0, 1000).map((row) => normalize(row[rightHeader])).filter(Boolean));
+    const leftValues = left.rows.slice(0, 1000).map((row) => normalize(row[leftHeader])).filter(Boolean);
+    const overlap = leftValues.length ? leftValues.filter((value) => rightValues.has(value)).length / leftValues.length : 0;
+    const score = nameScore + overlap * 100;
+    if (score > best.score) best = { left: leftHeader, right: rightHeader, score };
+  }
+  return best;
+}
+function selectColumns(rows: Record<string, unknown>[], columns: string[]) {
+  return rows.map((row) => Object.fromEntries(columns.map((column) => [column, row[column] ?? ''])));
 }
 
 function createJoin(left: TableFile, right: TableFile, leftKey: string, rightKey: string, parts: JoinParts) {
@@ -46,13 +65,16 @@ export default function Home() {
   const [mode, setMode] = useState<Mode>('dedupe'); const [files, setFiles] = useState<TableFile[]>([]);
   const [keys, setKeys] = useState<string[]>([]); const [keep, setKeep] = useState<'first' | 'last'>('first');
   const [leftKey, setLeftKey] = useState(''); const [rightKey, setRightKey] = useState(''); const [joinParts, setJoinParts] = useState<JoinParts>({ leftOnly: false, inner: true, rightOnly: false });
+  const [outputColumns, setOutputColumns] = useState<string[] | null>(null);
   const [showJoinHelp, setShowJoinHelp] = useState(false);
   const [busy, setBusy] = useState(false); const [dragging, setDragging] = useState(false); const [message, setMessage] = useState('');
   const input = useRef<HTMLInputElement>(null);
+  const folderInput = useRef<HTMLInputElement>(null);
+  const smartAppliedFor = useRef('');
   const workspaces = useRef<Partial<Record<Mode, ModeWorkspace>>>({});
   const switchMode = (next: Mode) => {
     if (next === mode) return;
-    workspaces.current[mode] = { files, keys, keep, leftKey, rightKey, joinParts, message };
+    workspaces.current[mode] = { files, keys, keep, leftKey, rightKey, joinParts, outputColumns, message };
     const saved = workspaces.current[next];
     setMode(next);
     setFiles(saved?.files ?? []);
@@ -61,6 +83,7 @@ export default function Home() {
     setLeftKey(saved?.leftKey ?? '');
     setRightKey(saved?.rightKey ?? '');
     setJoinParts(saved?.joinParts ?? { leftOnly: false, inner: true, rightOnly: false });
+    setOutputColumns(saved?.outputColumns ?? null);
     setShowJoinHelp(false);
     setMessage(saved?.message ?? '');
     setDragging(false);
@@ -77,6 +100,17 @@ export default function Home() {
   }, [allCompatible, files, keys, mode]);
   useEffect(() => { if (mode === 'join' && files[0] && !leftKey) setLeftKey(files[0].headers[0] ?? ''); if (mode === 'join' && files[1] && !rightKey) { const common = files[1].headers.find((header) => header === leftKey); setRightKey(common ?? files[1].headers[0] ?? ''); } }, [files, leftKey, mode, rightKey]);
   const joinPreview = useMemo(() => mode === 'join' && files.length === 2 && leftKey && rightKey ? createJoin(files[0], files[1], leftKey, rightKey, joinParts) : null, [files, joinParts, leftKey, mode, rightKey]);
+  const availableOutputColumns = useMemo(() => mode === 'join' ? joinPreview?.headers ?? [] : files[0]?.headers ?? [], [files, joinPreview, mode]);
+  const selectedOutputColumns = outputColumns ?? availableOutputColumns;
+  const smartJoin = useMemo(() => mode === 'join' && files.length === 2 ? suggestJoinKeys(files[0], files[1]) : null, [files, mode]);
+  useEffect(() => { setOutputColumns((current) => current?.filter((column) => availableOutputColumns.includes(column)) ?? null); }, [availableOutputColumns]);
+  useEffect(() => {
+    if (!smartJoin || files.length !== 2) return;
+    const signature = files.map((file) => `${file.name}:${file.rows.length}:${file.headers.join('|')}`).join('::');
+    if (smartAppliedFor.current === signature) return;
+    smartAppliedFor.current = signature;
+    setLeftKey(smartJoin.left); setRightKey(smartJoin.right);
+  }, [files, smartJoin]);
   const joinLabel = joinParts.leftOnly && joinParts.inner && joinParts.rightOnly ? 'Tout' : joinParts.leftOnly && joinParts.inner ? 'Gauche + intersection' : joinParts.inner && joinParts.rightOnly ? 'Droite + intersection' : joinParts.leftOnly && joinParts.rightOnly ? 'Externes A + B' : joinParts.leftOnly ? 'Externe gauche' : joinParts.rightOnly ? 'Externe droite' : 'Interne';
   const joinPresetKey = `${Number(joinParts.leftOnly)}${Number(joinParts.inner)}${Number(joinParts.rightOnly)}`;
   const toggleJoinPart = (part: keyof JoinParts) => setJoinParts((current) => { const next = { ...current, [part]: !current[part] }; return next.leftOnly || next.inner || next.rightOnly ? next : current; });
@@ -92,21 +126,25 @@ export default function Home() {
     if (!files.length) return;
     if (mode === 'join') {
       if (files.length !== 2 || !leftKey || !rightKey) { setMessage('Ajoutez deux fichiers et choisissez les deux clés de jointure.'); return; }
-      const result = createJoin(files[0], files[1], leftKey, rightKey, joinParts); saveWorkbook(result.rows, 'jointure_excel.xlsx', result.headers); setMessage(`${result.rows.length.toLocaleString('fr-FR')} lignes générées par la jointure.`);
+      if (!selectedOutputColumns.length) { setMessage('Sélectionnez au moins une colonne pour le fichier final.'); return; }
+      const result = createJoin(files[0], files[1], leftKey, rightKey, joinParts); saveWorkbook(selectColumns(result.rows, selectedOutputColumns), 'jointure_excel.xlsx', selectedOutputColumns); setMessage(`${result.rows.length.toLocaleString('fr-FR')} lignes générées par la jointure.`);
     } else if (mode === 'dedupe') {
       if (!keys.length) { setMessage('Sélectionnez au moins une colonne de comparaison.'); return; }
       const source = files[0].rows; const seen = new Set<string>(); const ordered = keep === 'last' ? [...source].reverse() : source;
       const clean = ordered.filter((row) => { const signature = keys.map((key) => String(row[key] ?? '').trim().toLocaleLowerCase('fr')).join('\u0001'); if (seen.has(signature)) return false; seen.add(signature); return true; });
-      if (keep === 'last') clean.reverse(); saveWorkbook(clean, `sans_doublons_${files[0].name.replace(/\.[^.]+$/, '')}.xlsx`, files[0].headers); setMessage(`${source.length - clean.length} doublon(s) supprimé(s). Le résultat a été téléchargé.`);
+      if (!selectedOutputColumns.length) { setMessage('Sélectionnez au moins une colonne pour le fichier final.'); return; }
+      if (keep === 'last') clean.reverse(); saveWorkbook(selectColumns(clean, selectedOutputColumns), `sans_doublons_${files[0].name.replace(/\.[^.]+$/, '')}.xlsx`, selectedOutputColumns); setMessage(`${source.length - clean.length} doublon(s) supprimé(s). Le résultat a été téléchargé.`);
     } else if (mode === 'merge') {
       if (!allCompatible) { setMessage('Les colonnes ne correspondent pas. Corrigez les fichiers signalés.'); return; }
-      saveWorkbook(files.flatMap((file) => file.rows), 'fichiers_fusionnes.xlsx', files[0].headers); setMessage(`${files.length} fichiers et ${totalRows.toLocaleString('fr-FR')} lignes ont été fusionnés.`);
+      if (!selectedOutputColumns.length) { setMessage('Sélectionnez au moins une colonne pour le fichier final.'); return; }
+      saveWorkbook(selectColumns(files.flatMap((file) => file.rows), selectedOutputColumns), 'fichiers_fusionnes.xlsx', selectedOutputColumns); setMessage(`${files.length} fichiers et ${totalRows.toLocaleString('fr-FR')} lignes ont été fusionnés.`);
     } else {
       if (!allCompatible) { setMessage('Les colonnes ne correspondent pas. Corrigez les fichiers signalés.'); return; }
       if (!keys.length) { setMessage('Sélectionnez au moins une colonne pour identifier les doublons.'); return; }
       const merged = files.flatMap((file) => file.rows); const seen = new Set<string>(); const ordered = keep === 'last' ? [...merged].reverse() : merged;
       const clean = ordered.filter((row) => { const signature = keys.map((key) => String(row[key] ?? '').trim().toLocaleLowerCase('fr')).join('\u0001'); if (seen.has(signature)) return false; seen.add(signature); return true; });
-      if (keep === 'last') clean.reverse(); saveWorkbook(clean, 'fusion_sans_doublons.xlsx', files[0].headers); setMessage(`${files.length} fichiers fusionnés · ${merged.length - clean.length} doublon(s) supprimé(s) · ${clean.length.toLocaleString('fr-FR')} lignes conservées.`);
+      if (!selectedOutputColumns.length) { setMessage('Sélectionnez au moins une colonne pour le fichier final.'); return; }
+      if (keep === 'last') clean.reverse(); saveWorkbook(selectColumns(clean, selectedOutputColumns), 'fusion_sans_doublons.xlsx', selectedOutputColumns); setMessage(`${files.length} fichiers fusionnés · ${merged.length - clean.length} doublon(s) supprimé(s) · ${clean.length.toLocaleString('fr-FR')} lignes conservées.`);
     }
   }
   const title = mode === 'dedupe' ? 'Supprimer les doublons' : mode === 'merge' ? 'Fusionner des fichiers' : mode === 'merge-dedupe' ? 'Fusionner et dédoublonner' : 'Créer une jointure';
@@ -119,18 +157,21 @@ export default function Home() {
       <div className="toolcard">
         <div className="toolhead"><div><span className="step">01</span><h2>{title}</h2><p>{description}</p></div><div className="format">XLSX&nbsp;&nbsp; XLS&nbsp;&nbsp; CSV</div></div>
         <input ref={input} hidden type="file" accept={accepted} multiple={mode !== 'dedupe'} onChange={(e: ChangeEvent<HTMLInputElement>) => e.target.files && addFiles(e.target.files)} />
+        <input ref={folderInput} hidden type="file" accept={accepted} multiple {...({ webkitdirectory: '', directory: '' } as Record<string, string>)} onChange={(e: ChangeEvent<HTMLInputElement>) => e.target.files && addFiles(e.target.files)} />
         <div className={`dropzone ${dragging ? 'dragging' : ''} ${busy ? 'isLoading' : ''}`} aria-busy={busy} onClick={() => !busy && input.current?.click()} onPointerMove={(e) => { const box = e.currentTarget.getBoundingClientRect(); e.currentTarget.style.setProperty('--mouse-x', `${e.clientX - box.left}px`); e.currentTarget.style.setProperty('--mouse-y', `${e.clientY - box.top}px`); }} onDragOver={(e) => { e.preventDefault(); if (!busy) setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={onDrop}>
           <div className={`uploadIcon ${busy ? 'loading' : ''}`}>{busy ? <span className="spinner" /> : <span className="arrow">⇧</span>}</div>
           <strong>{busy ? 'Analyse de vos données…' : dragging ? 'Relâchez pour importer' : mode !== 'dedupe' ? 'Déposez vos fichiers ici' : 'Déposez votre fichier ici'}</strong>
           <span>{busy ? 'Lecture des colonnes et des lignes' : 'ou cliquez pour parcourir'}</span>
           {busy ? <div className="loadingTrack"><span /></div> : <small>{mode !== 'dedupe' ? 'Plusieurs fichiers autorisés · ' : ''}50 Mo maximum par fichier</small>}
         </div>
+        {!files.length && mode !== 'dedupe' && mode !== 'join' && <button className="folderEntry" onClick={() => folderInput.current?.click()}><span>▣</span><div><strong>Importer tout un dossier</strong><small>Seuls les fichiers Excel et CSV du dossier seront ajoutés.</small></div><b>Choisir un dossier →</b></button>}
         {!!files.length && <div className="settings">
-          <div className="filelist">{files.map((file, index) => <div className="file" key={`${file.name}-${index}`}><span className="fileIcon">{mode === 'join' ? index === 0 ? 'A' : 'B' : 'XL'}</span><div><strong>{file.name}</strong><small>{file.rows.length.toLocaleString('fr-FR')} lignes · {file.headers.length} colonnes</small></div><button aria-label={`Retirer ${file.name}`} onClick={() => setFiles(files.filter((_, i) => i !== index))}>×</button></div>)}{mode !== 'dedupe' && (mode !== 'join' || files.length < 2) && <button className="addmore" onClick={() => input.current?.click()}>+ Ajouter {mode === 'join' ? 'le second fichier' : 'd’autres fichiers'}</button>}</div>
+          <div className="filelist">{files.map((file, index) => <div className="file" key={`${file.name}-${index}`}><span className="fileIcon">{mode === 'join' ? index === 0 ? 'A' : 'B' : 'XL'}</span><div><strong>{file.name}</strong><small>{file.rows.length.toLocaleString('fr-FR')} lignes · {file.headers.length} colonnes</small></div><button aria-label={`Retirer ${file.name}`} onClick={() => setFiles(files.filter((_, i) => i !== index))}>×</button></div>)}{mode !== 'dedupe' && (mode !== 'join' || files.length < 2) && <div className="addActions"><button className="addmore" onClick={() => input.current?.click()}>+ Ajouter {mode === 'join' ? 'le second fichier' : 'des fichiers'}</button>{mode !== 'join' && <button className="addmore folderButton" onClick={() => folderInput.current?.click()}>▣ Importer un dossier</button>}</div>}</div>
           {mode !== 'dedupe' && mode !== 'join' && <div className={`compat ${allCompatible ? '' : 'error'}`}><span>{allCompatible ? '✓' : '!'}</span><div><strong>{allCompatible ? 'Colonnes compatibles' : 'Colonnes incompatibles'}</strong><small>{allCompatible ? 'Les fichiers seront réunis dans l’ordre affiché.' : 'Chaque fichier doit contenir exactement les mêmes colonnes.'}</small></div></div>}
           {mode !== 'merge' && mode !== 'join' && <div className="options"><label>Colonnes utilisées pour identifier un doublon</label><div className="chips">{files[0].headers.map((header) => <button key={header} className={keys.includes(header) ? 'selected' : ''} onClick={() => setKeys(keys.includes(header) ? keys.filter((key) => key !== header) : [...keys, header])}>{keys.includes(header) ? '✓ ' : ''}{header}</button>)}</div><label>Occurrence à conserver</label><div className="radio"><button className={keep === 'first' ? 'selected' : ''} onClick={() => setKeep('first')}>◉ Première ligne</button><button className={keep === 'last' ? 'selected' : ''} onClick={() => setKeep('last')}>◉ Dernière ligne</button></div></div>}
           {mode === 'join' && files.length === 2 && <div className="joinBuilder">
             <div className="joinKeys"><label><span>Table A · clé de jointure</span><select value={leftKey} onChange={(e) => setLeftKey(e.target.value)}>{files[0].headers.map((header) => <option key={header}>{header}</option>)}</select></label><div className="joinLink"><span></span><b>=</b><span></span></div><label><span>Table B · clé de jointure</span><select value={rightKey} onChange={(e) => setRightKey(e.target.value)}>{files[1].headers.map((header) => <option key={header}>{header}</option>)}</select></label></div>
+            {smartJoin && <div className="smartSuggestion"><span className="smartIcon">✦</span><div><strong>Clés détectées automatiquement</strong><small>{smartJoin.left} ↔ {smartJoin.right}</small></div><button onClick={() => { setLeftKey(smartJoin.left); setRightKey(smartJoin.right); }}>Utiliser cette suggestion</button></div>}
             <div className="joinTypes">
               <div className="joinTypeHeading"><label>Sélection : <strong>{joinLabel}</strong></label><button className="joinHelpButton" aria-label="Comprendre les zones de jointure" aria-expanded={showJoinHelp} onClick={() => setShowJoinHelp(!showJoinHelp)}>?</button></div>
               {showJoinHelp && <div className="joinHelp" role="note">
@@ -150,6 +191,7 @@ export default function Home() {
             </div>
             {joinPreview && <div className="joinResult" aria-live="polite"><span className={joinParts.inner ? 'included' : 'excluded'}><strong>{joinPreview.matched.toLocaleString('fr-FR')}</strong> correspondances</span><span className={joinParts.leftOnly ? 'included' : 'excluded'}><strong>{joinPreview.leftOnly.toLocaleString('fr-FR')}</strong> A uniquement</span><span className={joinParts.rightOnly ? 'included' : 'excluded'}><strong>{joinPreview.rightOnly.toLocaleString('fr-FR')}</strong> B uniquement</span><span className="resultTotal"><strong>{joinPreview.rows.length.toLocaleString('fr-FR')}</strong> lignes en sortie</span></div>}
           </div>}
+          {!!availableOutputColumns.length && <div className="outputColumns"><div className="outputHeading"><div><label>Colonnes du fichier final</label><small>{selectedOutputColumns.length} sur {availableOutputColumns.length} sélectionnée(s)</small></div><div><button onClick={() => setOutputColumns([...availableOutputColumns])}>Tout sélectionner</button><button onClick={() => setOutputColumns([])}>Tout retirer</button></div></div><div className="chips">{availableOutputColumns.map((column) => <button key={column} className={selectedOutputColumns.includes(column) ? 'selected' : ''} onClick={() => setOutputColumns(selectedOutputColumns.includes(column) ? selectedOutputColumns.filter((item) => item !== column) : [...selectedOutputColumns, column])}>{selectedOutputColumns.includes(column) ? '✓ ' : ''}{column}</button>)}</div></div>}
           {previewStats && <div className="liveStats" aria-live="polite"><span><strong>{previewStats.duplicates.toLocaleString('fr-FR')}</strong> doublon(s) détecté(s)</span><i></i><span><strong>{previewStats.remaining.toLocaleString('fr-FR')}</strong> lignes après traitement</span></div>}
           <button className="primary" disabled={busy || (mode !== 'dedupe' && files.length < 2)} onClick={process}>{mode === 'dedupe' ? 'Supprimer les doublons' : mode === 'merge' ? 'Fusionner et télécharger' : mode === 'merge-dedupe' ? 'Fusionner, dédoublonner et télécharger' : 'Créer la jointure et télécharger'} <span>→</span></button>
         </div>}{message && <div className="message" role="status">{message}</div>}
