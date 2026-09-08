@@ -5,6 +5,15 @@ import * as XLSX from 'xlsx';
 type Mode = 'dedupe' | 'merge' | 'merge-dedupe' | 'join';
 type JoinParts = { leftOnly: boolean; inner: boolean; rightOnly: boolean };
 type TableFile = { name: string; headers: string[]; rows: Record<string, unknown>[] };
+type ModeWorkspace = {
+  files: TableFile[];
+  keys: string[];
+  keep: 'first' | 'last';
+  leftKey: string;
+  rightKey: string;
+  joinParts: JoinParts;
+  message: string;
+};
 const accepted = '.xlsx,.xls,.csv';
 
 async function readExcel(file: File): Promise<TableFile> {
@@ -40,7 +49,23 @@ export default function Home() {
   const [showJoinHelp, setShowJoinHelp] = useState(false);
   const [busy, setBusy] = useState(false); const [dragging, setDragging] = useState(false); const [message, setMessage] = useState('');
   const input = useRef<HTMLInputElement>(null);
-  const reset = (next: Mode) => { setMode(next); setFiles([]); setKeys([]); setLeftKey(''); setRightKey(''); setJoinParts({ leftOnly: false, inner: true, rightOnly: false }); setShowJoinHelp(false); setMessage(''); };
+  const workspaces = useRef<Partial<Record<Mode, ModeWorkspace>>>({});
+  const switchMode = (next: Mode) => {
+    if (next === mode) return;
+    workspaces.current[mode] = { files, keys, keep, leftKey, rightKey, joinParts, message };
+    const saved = workspaces.current[next];
+    setMode(next);
+    setFiles(saved?.files ?? []);
+    setKeys(saved?.keys ?? []);
+    setKeep(saved?.keep ?? 'first');
+    setLeftKey(saved?.leftKey ?? '');
+    setRightKey(saved?.rightKey ?? '');
+    setJoinParts(saved?.joinParts ?? { leftOnly: false, inner: true, rightOnly: false });
+    setShowJoinHelp(false);
+    setMessage(saved?.message ?? '');
+    setDragging(false);
+    if (input.current) input.current.value = '';
+  };
   const allCompatible = useMemo(() => { if (files.length < 2) return true; const base = [...files[0].headers].sort().join('\u0000'); return files.every((file) => [...file.headers].sort().join('\u0000') === base); }, [files]);
   const totalRows = files.reduce((sum, file) => sum + file.rows.length, 0);
   const previewStats = useMemo(() => {
@@ -90,7 +115,7 @@ export default function Home() {
     <nav><a className="brand" href="#"><span className="brandmark">X</span><span>Excel<span>Flow</span> <small>by Dhafer</small></span></a><div className="privacy"><span>✓</span> Vos fichiers restent sur votre appareil</div></nav>
     <section className="hero"><div className="eyebrow">OUTILS EXCEL, SANS COMPLICATION</div><h1>Vos fichiers Excel,<br/><em>propres et réunis.</em></h1></section>
     <section className="workspace">
-      <div className="tabs" role="tablist"><button className={mode === 'dedupe' ? 'active' : ''} onClick={() => reset('dedupe')}><span className="tabicon">⌁</span> Supprimer les doublons</button><button className={mode === 'merge' ? 'active' : ''} onClick={() => reset('merge')}><span className="tabicon">⊕</span> Fusionner</button><button className={mode === 'merge-dedupe' ? 'active' : ''} onClick={() => reset('merge-dedupe')}><span className="tabicon">◎</span> Fusionner + dédoublonner</button><button className={mode === 'join' ? 'active' : ''} onClick={() => reset('join')}><span className="tabicon">⌘</span> Jointure</button></div>
+      <div className="tabs" role="tablist"><button className={mode === 'dedupe' ? 'active' : ''} onClick={() => switchMode('dedupe')}><span className="tabicon">⌁</span> Supprimer les doublons</button><button className={mode === 'merge' ? 'active' : ''} onClick={() => switchMode('merge')}><span className="tabicon">⊕</span> Fusionner</button><button className={mode === 'merge-dedupe' ? 'active' : ''} onClick={() => switchMode('merge-dedupe')}><span className="tabicon">◎</span> Fusionner + dédoublonner</button><button className={mode === 'join' ? 'active' : ''} onClick={() => switchMode('join')}><span className="tabicon">⌘</span> Jointure</button></div>
       <div className="toolcard">
         <div className="toolhead"><div><span className="step">01</span><h2>{title}</h2><p>{description}</p></div><div className="format">XLSX&nbsp;&nbsp; XLS&nbsp;&nbsp; CSV</div></div>
         <input ref={input} hidden type="file" accept={accepted} multiple={mode !== 'dedupe'} onChange={(e: ChangeEvent<HTMLInputElement>) => e.target.files && addFiles(e.target.files)} />
