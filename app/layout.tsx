@@ -1,6 +1,8 @@
 import type { Metadata } from 'next';
 import './globals.css';
 import './signature.css';
+import './join-rework.css';
+import './venn-clean.css';
 
 export const metadata: Metadata = {
   title: 'ExcelFlow — Nettoyez et fusionnez vos fichiers Excel',

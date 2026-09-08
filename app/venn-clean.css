@@ -1,0 +1,34 @@
+.joinTypes .joinPickerClean { display:flex!important; flex-direction:column!important; align-items:center!important; width:100%; padding:5px 0 10px; }
+.vennDiagramClean { position:relative; width:132px; height:78px; isolation:isolate; }
+
+/* The two permanent circle outlines */
+.circleOutline { display:none; }
+.circleA { left:10px; border-color:#dd7a50; }
+.circleB { right:10px; border-color:#328c8b; }
+
+/* Clickable fills never draw their own outline */
+.joinTypes .joinZone { position:absolute!important; display:block!important; min-height:0!important; padding:0!important; border:0!important; color:#174633!important; box-shadow:none!important; cursor:pointer; transition:background .16s ease,opacity .16s ease; }
+.joinTypes .zoneLeft { z-index:1!important; top:7px!important; left:11px!important; width:64px!important; height:64px!important; border-radius:50%!important; background:#edf2ef!important; }
+.joinTypes .zoneRight { z-index:2!important; top:7px!important; right:11px!important; width:64px!important; height:64px!important; border-radius:50%!important; background:#edf2ef!important; }
+.joinTypes .zoneMiddle { z-index:6!important; top:12px!important; left:50px!important; width:32px!important; height:54px!important; border-radius:50%!important; background:#e1e9e5!important; }
+
+.joinTypes .zoneLeft.active,.joinTypes .zoneRight.active { background:#76c9a5!important; }
+.joinTypes .zoneMiddle.active { background:#0c7655!important; }
+.joinTypes .joinZone:hover { transform:none!important; }
+.joinTypes .zoneLeft:not(.active):hover,.joinTypes .zoneRight:not(.active):hover { background:rgba(91,183,143,.11)!important; }
+.joinTypes .zoneMiddle:not(.active):hover { background:#e5f3ec!important; }
+
+.joinZone span { position:absolute; top:50%; transform:translateY(-50%); font-size:9px; font-weight:900; pointer-events:none; }
+.zoneLeft span { left:20px; }.zoneRight span { right:20px; }.zoneMiddle span { left:50%; transform:translate(-50%,-50%); }
+.zoneMiddle.active span { color:#fff; }
+
+.zoneLegend { display:grid; grid-template-columns:72px 48px 72px; margin-top:3px; color:#7d8983; text-align:center; font-size:8px; }
+.zoneLegend span:nth-child(2) { color:#315d4b; font-weight:800; }
+@media(max-width:480px){.vennDiagramClean{transform:none}.zoneLegend{font-size:7.5px}}
+
+.helpOptions { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin-top:14px; }
+.helpOptions > div { display:flex; align-items:flex-start; gap:10px; padding:10px; border:1px solid #dde8e2; border-radius:8px; background:#f9fcfa; }
+.helpOptions > div > b { display:grid; place-items:center; flex:0 0 46px; min-height:30px; border-radius:7px; color:#0b6f50; background:#e3f3eb; font-size:10px; }
+.helpOptions p { margin:0; color:#65746d; font-size:9px; line-height:1.4; }
+.helpOptions p strong { display:block; margin-bottom:2px; color:#173f30; font-size:10px; }
+@media(max-width:560px){.helpOptions{grid-template-columns:1fr}}

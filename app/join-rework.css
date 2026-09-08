@@ -1,0 +1,69 @@
+.singleJoinPicker {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) !important;
+  grid-template-areas: "fileA fileB" "diagram diagram" !important;
+  gap: 12px 18px !important;
+  padding: 14px 16px 8px !important;
+  border: 1px solid #dbe7e0 !important;
+  border-radius: 12px !important;
+  background: linear-gradient(180deg, #ffffff, #f8fbf9) !important;
+}
+.tableSide { width: 100% !important; max-width: none !important; min-height: 48px; padding: 9px 11px; border: 1px solid #d8e3dd; border-radius: 9px; background: #fff; white-space: normal !important; overflow: visible !important; overflow-wrap: anywhere; line-height: 1.35; }
+.tableSideA { grid-area: fileA; justify-content: flex-start !important; text-align: left !important; }
+.tableSideB { grid-area: fileB; justify-content: flex-start !important; }
+.tableSide b { flex: 0 0 28px !important; width: 28px !important; height: 28px !important; border-radius: 8px !important; }
+.bigVenn { grid-area: diagram; justify-self: center; width: 154px !important; height: 105px !important; margin: 2px 0 3px; }
+.bigVenn button { top: 7px !important; width: 91px !important; height: 91px !important; border: 1.5px solid #508c74 !important; background: #f5f9f7 !important; box-shadow: inset 0 1px 0 rgba(255,255,255,.8) !important; }
+.bigVenn .vennLeft { left: 1px !important; }
+.bigVenn .vennRight { right: 1px !important; }
+.bigVenn .vennCenter { left: 61px !important; top: 15px !important; width: 32px !important; height: 75px !important; border: 0 !important; background: #f5f9f7 !important; box-shadow: inset 0 0 0 1.5px #508c74 !important; }
+.bigVenn.hasLeft .vennLeft { background: linear-gradient(145deg,#8bd6b4,#62c397) !important; box-shadow: 0 6px 16px rgba(13,104,76,.15) !important; }
+.bigVenn.hasInner .vennCenter { background: linear-gradient(180deg,#0f8c64,#08704f) !important; box-shadow: 0 5px 13px rgba(8,112,79,.22) !important; }
+.bigVenn.hasRight .vennRight { background: linear-gradient(145deg,#8bd6b4,#62c397) !important; box-shadow: 0 6px 16px rgba(13,104,76,.15) !important; }
+.bigVenn::before,.bigVenn::after { top: 46px !important; z-index: 7 !important; font-size: 10px !important; }
+.bigVenn::before { left: 29px !important; }.bigVenn::after { right: 29px !important; }
+@media(max-width:620px){.singleJoinPicker{grid-template-columns:1fr!important;grid-template-areas:"fileA" "fileB" "diagram"!important}.bigVenn{transform:none!important}}
+
+/* Final Venn interaction: two circles only, with a transparent hit area for the overlap. */
+.singleJoinPicker {
+  display: flex !important;
+  justify-content: center !important;
+  padding: 8px 0 14px !important;
+  border: 0 !important;
+  background: transparent !important;
+}
+.singleJoinPicker .tableSide { display: none !important; }
+.bigVenn {
+  width: 166px !important;
+  height: 112px !important;
+  margin: 0 !important;
+}
+.bigVenn button {
+  top: 8px !important;
+  width: 96px !important;
+  height: 96px !important;
+  border: 1.5px solid #4b8a70 !important;
+  background: rgba(255,255,255,.02) !important;
+  box-shadow: none !important;
+}
+.bigVenn .vennLeft { left: 2px !important; z-index: 2 !important; }
+.bigVenn .vennRight { right: 2px !important; z-index: 2 !important; }
+.bigVenn .vennCenter {
+  left: 66px !important;
+  top: 17px !important;
+  z-index: 5 !important;
+  width: 34px !important;
+  height: 78px !important;
+  border: 0 !important;
+  border-radius: 50% !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+.bigVenn.hasLeft .vennLeft { background: rgba(99,197,153,.72) !important; border-color: #267c5b !important; }
+.bigVenn.hasRight .vennRight { background: rgba(99,197,153,.72) !important; border-color: #267c5b !important; }
+.bigVenn.hasInner .vennCenter { background: #087453 !important; box-shadow: 0 3px 9px rgba(8,116,83,.22) !important; }
+.bigVenn .vennCenter[aria-pressed="false"]:hover { background: rgba(80,177,133,.24) !important; }
+.bigVenn .vennLeft[aria-pressed="false"]:hover,.bigVenn .vennRight[aria-pressed="false"]:hover { background: rgba(80,177,133,.10) !important; }
+.bigVenn::before,.bigVenn::after { top: 50px !important; font-size: 11px !important; }
+.bigVenn::before { left: 32px !important; }.bigVenn::after { right: 32px !important; }
+@media(max-width:620px){.singleJoinPicker{display:flex!important}.bigVenn{transform:none!important}}

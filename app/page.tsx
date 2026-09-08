@@ -3,7 +3,7 @@
 import { ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from 'react';
 import * as XLSX from 'xlsx';
 type Mode = 'dedupe' | 'merge' | 'merge-dedupe' | 'join';
-type JoinKind = 'inner' | 'left' | 'right' | 'full';
+type JoinParts = { leftOnly: boolean; inner: boolean; rightOnly: boolean };
 type TableFile = { name: string; headers: string[]; rows: Record<string, unknown>[] };
 const accepted = '.xlsx,.xls,.csv';
 
@@ -20,27 +20,27 @@ function saveWorkbook(rows: Record<string, unknown>[], name: string, headers?: s
   const book = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(book, sheet, 'Résultat'); XLSX.writeFile(book, name);
 }
 
-function createJoin(left: TableFile, right: TableFile, leftKey: string, rightKey: string, kind: JoinKind) {
+function createJoin(left: TableFile, right: TableFile, leftKey: string, rightKey: string, parts: JoinParts) {
   const rightNames = new Map(right.headers.map((header) => [header, left.headers.includes(header) ? `${header}_droite` : header]));
   const headers = [...left.headers, ...right.headers.map((header) => rightNames.get(header)!)];
   const index = new Map<string, { row: Record<string, unknown>; index: number }[]>();
   right.rows.forEach((row, rowIndex) => { const value = String(row[rightKey] ?? '').trim().toLocaleLowerCase('fr'); const group = index.get(value) ?? []; group.push({ row, index: rowIndex }); index.set(value, group); });
   const matchedRight = new Set<number>(); const rows: Record<string, unknown>[] = []; let matched = 0; let leftOnly = 0;
   const combine = (leftRow?: Record<string, unknown>, rightRow?: Record<string, unknown>) => { const result: Record<string, unknown> = {}; left.headers.forEach((header) => { result[header] = leftRow?.[header] ?? ''; }); right.headers.forEach((header) => { result[rightNames.get(header)!] = rightRow?.[header] ?? ''; }); return result; };
-  left.rows.forEach((leftRow) => { const value = String(leftRow[leftKey] ?? '').trim().toLocaleLowerCase('fr'); const matches = index.get(value) ?? []; if (matches.length) { matches.forEach((item) => { rows.push(combine(leftRow, item.row)); matchedRight.add(item.index); matched++; }); } else { leftOnly++; if (kind === 'left' || kind === 'full') rows.push(combine(leftRow)); } });
+  left.rows.forEach((leftRow) => { const value = String(leftRow[leftKey] ?? '').trim().toLocaleLowerCase('fr'); const matches = index.get(value) ?? []; if (matches.length) { matches.forEach((item) => { if (parts.inner) rows.push(combine(leftRow, item.row)); matchedRight.add(item.index); matched++; }); } else { leftOnly++; if (parts.leftOnly) rows.push(combine(leftRow)); } });
   const rightOnly = right.rows.length - matchedRight.size;
-  if (kind === 'right' || kind === 'full') right.rows.forEach((rightRow, index) => { if (!matchedRight.has(index)) rows.push(combine(undefined, rightRow)); });
+  if (parts.rightOnly) right.rows.forEach((rightRow, index) => { if (!matchedRight.has(index)) rows.push(combine(undefined, rightRow)); });
   return { rows, headers, matched, leftOnly, rightOnly };
 }
 
 export default function Home() {
   const [mode, setMode] = useState<Mode>('dedupe'); const [files, setFiles] = useState<TableFile[]>([]);
   const [keys, setKeys] = useState<string[]>([]); const [keep, setKeep] = useState<'first' | 'last'>('first');
-  const [leftKey, setLeftKey] = useState(''); const [rightKey, setRightKey] = useState(''); const [joinKind, setJoinKind] = useState<JoinKind>('inner');
+  const [leftKey, setLeftKey] = useState(''); const [rightKey, setRightKey] = useState(''); const [joinParts, setJoinParts] = useState<JoinParts>({ leftOnly: false, inner: true, rightOnly: false });
   const [showJoinHelp, setShowJoinHelp] = useState(false);
   const [busy, setBusy] = useState(false); const [dragging, setDragging] = useState(false); const [message, setMessage] = useState('');
   const input = useRef<HTMLInputElement>(null);
-  const reset = (next: Mode) => { setMode(next); setFiles([]); setKeys([]); setLeftKey(''); setRightKey(''); setShowJoinHelp(false); setMessage(''); };
+  const reset = (next: Mode) => { setMode(next); setFiles([]); setKeys([]); setLeftKey(''); setRightKey(''); setJoinParts({ leftOnly: false, inner: true, rightOnly: false }); setShowJoinHelp(false); setMessage(''); };
   const allCompatible = useMemo(() => { if (files.length < 2) return true; const base = [...files[0].headers].sort().join('\u0000'); return files.every((file) => [...file.headers].sort().join('\u0000') === base); }, [files]);
   const totalRows = files.reduce((sum, file) => sum + file.rows.length, 0);
   const previewStats = useMemo(() => {
@@ -51,7 +51,10 @@ export default function Home() {
     return { total: rows.length, duplicates: rows.length - signatures.size, remaining: signatures.size };
   }, [allCompatible, files, keys, mode]);
   useEffect(() => { if (mode === 'join' && files[0] && !leftKey) setLeftKey(files[0].headers[0] ?? ''); if (mode === 'join' && files[1] && !rightKey) { const common = files[1].headers.find((header) => header === leftKey); setRightKey(common ?? files[1].headers[0] ?? ''); } }, [files, leftKey, mode, rightKey]);
-  const joinPreview = useMemo(() => mode === 'join' && files.length === 2 && leftKey && rightKey ? createJoin(files[0], files[1], leftKey, rightKey, joinKind) : null, [files, joinKind, leftKey, mode, rightKey]);
+  const joinPreview = useMemo(() => mode === 'join' && files.length === 2 && leftKey && rightKey ? createJoin(files[0], files[1], leftKey, rightKey, joinParts) : null, [files, joinParts, leftKey, mode, rightKey]);
+  const joinLabel = joinParts.leftOnly && joinParts.inner && joinParts.rightOnly ? 'Tout' : joinParts.leftOnly && joinParts.inner ? 'Gauche + intersection' : joinParts.inner && joinParts.rightOnly ? 'Droite + intersection' : joinParts.leftOnly && joinParts.rightOnly ? 'Externes A + B' : joinParts.leftOnly ? 'Externe gauche' : joinParts.rightOnly ? 'Externe droite' : 'Interne';
+  const joinPresetKey = `${Number(joinParts.leftOnly)}${Number(joinParts.inner)}${Number(joinParts.rightOnly)}`;
+  const toggleJoinPart = (part: keyof JoinParts) => setJoinParts((current) => { const next = { ...current, [part]: !current[part] }; return next.leftOnly || next.inner || next.rightOnly ? next : current; });
   async function addFiles(list: FileList | File[]) {
     const selected = Array.from(list).filter((file) => /\.(xlsx?|csv)$/i.test(file.name));
     if (!selected.length) { setMessage('Choisissez un fichier Excel ou CSV valide.'); return; }
@@ -64,7 +67,7 @@ export default function Home() {
     if (!files.length) return;
     if (mode === 'join') {
       if (files.length !== 2 || !leftKey || !rightKey) { setMessage('Ajoutez deux fichiers et choisissez les deux clés de jointure.'); return; }
-      const result = createJoin(files[0], files[1], leftKey, rightKey, joinKind); saveWorkbook(result.rows, 'jointure_excel.xlsx', result.headers); setMessage(`${result.rows.length.toLocaleString('fr-FR')} lignes générées par la jointure.`);
+      const result = createJoin(files[0], files[1], leftKey, rightKey, joinParts); saveWorkbook(result.rows, 'jointure_excel.xlsx', result.headers); setMessage(`${result.rows.length.toLocaleString('fr-FR')} lignes générées par la jointure.`);
     } else if (mode === 'dedupe') {
       if (!keys.length) { setMessage('Sélectionnez au moins une colonne de comparaison.'); return; }
       const source = files[0].rows; const seen = new Set<string>(); const ordered = keep === 'last' ? [...source].reverse() : source;
@@ -82,7 +85,7 @@ export default function Home() {
     }
   }
   const title = mode === 'dedupe' ? 'Supprimer les doublons' : mode === 'merge' ? 'Fusionner des fichiers' : mode === 'merge-dedupe' ? 'Fusionner et dédoublonner' : 'Créer une jointure';
-  const description = mode === 'dedupe' ? 'Détectez les lignes identiques selon les colonnes de votre choix.' : mode === 'merge' ? 'Regroupez les lignes de fichiers qui possèdent les mêmes colonnes.' : mode === 'merge-dedupe' ? 'Réunissez vos fichiers, puis retirez les doublons en une seule opération.' : 'Reliez deux tableaux grâce à une colonne commune, comme dans Tableau Prep.';
+  const description = mode === 'dedupe' ? 'Détectez les lignes identiques selon les colonnes de votre choix.' : mode === 'merge' ? 'Regroupez les lignes de fichiers qui possèdent les mêmes colonnes.' : mode === 'merge-dedupe' ? 'Réunissez vos fichiers, puis retirez les doublons en une seule opération.' : 'Reliez deux tableaux grâce à une colonne commune.';
   return <main>
     <nav><a className="brand" href="#"><span className="brandmark">X</span><span>Excel<span>Flow</span> <small>by Dhafer</small></span></a><div className="privacy"><span>✓</span> Vos fichiers restent sur votre appareil</div></nav>
     <section className="hero"><div className="eyebrow">OUTILS EXCEL, SANS COMPLICATION</div><h1>Vos fichiers Excel,<br/><em>propres et réunis.</em></h1></section>
@@ -103,8 +106,24 @@ export default function Home() {
           {mode !== 'merge' && mode !== 'join' && <div className="options"><label>Colonnes utilisées pour identifier un doublon</label><div className="chips">{files[0].headers.map((header) => <button key={header} className={keys.includes(header) ? 'selected' : ''} onClick={() => setKeys(keys.includes(header) ? keys.filter((key) => key !== header) : [...keys, header])}>{keys.includes(header) ? '✓ ' : ''}{header}</button>)}</div><label>Occurrence à conserver</label><div className="radio"><button className={keep === 'first' ? 'selected' : ''} onClick={() => setKeep('first')}>◉ Première ligne</button><button className={keep === 'last' ? 'selected' : ''} onClick={() => setKeep('last')}>◉ Dernière ligne</button></div></div>}
           {mode === 'join' && files.length === 2 && <div className="joinBuilder">
             <div className="joinKeys"><label><span>Table A · clé de jointure</span><select value={leftKey} onChange={(e) => setLeftKey(e.target.value)}>{files[0].headers.map((header) => <option key={header}>{header}</option>)}</select></label><div className="joinLink"><span></span><b>=</b><span></span></div><label><span>Table B · clé de jointure</span><select value={rightKey} onChange={(e) => setRightKey(e.target.value)}>{files[1].headers.map((header) => <option key={header}>{header}</option>)}</select></label></div>
-            <div className="joinTypes"><div className="joinTypeHeading"><label>Type de jointure</label><button className="joinHelpButton" aria-label="Comprendre les types de jointure" aria-expanded={showJoinHelp} onClick={() => setShowJoinHelp(!showJoinHelp)}>?</button></div>{showJoinHelp && <div className="joinHelp" role="note"><div className="helpTitle"><span>?</span><div><strong>Qu’est-ce qu’une jointure ?</strong><p>Une jointure relie les lignes de deux fichiers lorsque les valeurs des colonnes choisies sont identiques.</p></div></div><div className="helpGrid"><p><strong>Interne</strong>Garde uniquement les lignes présentes dans A et B.</p><p><strong>Gauche</strong>Garde toutes les lignes de A, même sans résultat dans B.</p><p><strong>Droite</strong>Garde toutes les lignes de B, même sans résultat dans A.</p><p><strong>Complète</strong>Garde toutes les lignes des deux fichiers.</p></div></div>}<div>{(['inner','left','right','full'] as JoinKind[]).map((kind) => <button title={{inner:'Uniquement les correspondances entre A et B',left:'Toutes les lignes de A et les correspondances de B',right:'Toutes les lignes de B et les correspondances de A',full:'Toutes les lignes de A et de B'}[kind]} key={kind} className={joinKind === kind ? 'selected' : ''} onClick={() => setJoinKind(kind)}><span className={`venn ${kind}`} aria-hidden="true"><i></i><i></i><b></b></span><strong>{{inner:'Interne',left:'Gauche',right:'Droite',full:'Complète'}[kind]}</strong></button>)}</div></div>
-            {joinPreview && <div className="joinResult" aria-live="polite"><span><strong>{joinPreview.matched.toLocaleString('fr-FR')}</strong> correspondances</span><span><strong>{joinPreview.leftOnly.toLocaleString('fr-FR')}</strong> A uniquement</span><span><strong>{joinPreview.rightOnly.toLocaleString('fr-FR')}</strong> B uniquement</span><span className="resultTotal"><strong>{joinPreview.rows.length.toLocaleString('fr-FR')}</strong> lignes en sortie</span></div>}
+            <div className="joinTypes">
+              <div className="joinTypeHeading"><label>Sélection : <strong>{joinLabel}</strong></label><button className="joinHelpButton" aria-label="Comprendre les zones de jointure" aria-expanded={showJoinHelp} onClick={() => setShowJoinHelp(!showJoinHelp)}>?</button></div>
+              {showJoinHelp && <div className="joinHelp" role="note">
+                <div className="helpTitle"><span>?</span><div><strong>Comprendre les jointures</strong><p>Une jointure compare la clé choisie dans les fichiers A et B. Sélectionnez le résultat que vous souhaitez conserver.</p></div></div>
+                <div className="helpOptions">
+                  <div><b>A − B</b><p><strong>Externe gauche</strong>Lignes de A sans correspondance dans B.</p></div>
+                  <div><b>A ∩ B</b><p><strong>Interne</strong>Lignes ayant une correspondance dans les deux fichiers.</p></div>
+                  <div><b>A + ∩</b><p><strong>Gauche + intersection</strong>Toutes les lignes de A, complétées avec B lorsqu’une correspondance existe.</p></div>
+                  <div><b>∩ + B</b><p><strong>Droite + intersection</strong>Toutes les lignes de B, complétées avec A lorsqu’une correspondance existe.</p></div>
+                  <div><b>B − A</b><p><strong>Externe droite</strong>Lignes de B sans correspondance dans A.</p></div>
+                  <div><b>A ∪ B</b><p><strong>Tout</strong>Toutes les lignes des deux fichiers, avec ou sans correspondance.</p></div>
+                </div>
+              </div>}
+              <div className="joinHint">Cliquez sur les zones ou choisissez une combinaison.</div>
+              <div className="joinPickerClean"><div className="vennDiagramClean" role="group" aria-label="Choisir les zones de la jointure"><span className="circleOutline circleA"></span><span className="circleOutline circleB"></span><button className={`joinZone zoneLeft ${joinParts.leftOnly ? 'active' : ''}`} aria-pressed={joinParts.leftOnly} aria-label="Lignes présentes uniquement dans A" onClick={() => toggleJoinPart('leftOnly')}><span>A</span></button><button className={`joinZone zoneMiddle ${joinParts.inner ? 'active' : ''}`} aria-pressed={joinParts.inner} aria-label="Correspondances entre A et B" onClick={() => toggleJoinPart('inner')}><span>∩</span></button><button className={`joinZone zoneRight ${joinParts.rightOnly ? 'active' : ''}`} aria-pressed={joinParts.rightOnly} aria-label="Lignes présentes uniquement dans B" onClick={() => toggleJoinPart('rightOnly')}><span>B</span></button></div><div className="zoneLegend"><span>A uniquement</span><span>Commun</span><span>B uniquement</span></div></div>
+              <div className="joinPresets">{[{key:'100',label:'Externe gauche',parts:{leftOnly:true,inner:false,rightOnly:false}},{key:'010',label:'Interne',parts:{leftOnly:false,inner:true,rightOnly:false}},{key:'110',label:'Gauche + intersection',parts:{leftOnly:true,inner:true,rightOnly:false}},{key:'011',label:'Droite + intersection',parts:{leftOnly:false,inner:true,rightOnly:true}},{key:'001',label:'Externe droite',parts:{leftOnly:false,inner:false,rightOnly:true}},{key:'111',label:'Tout',parts:{leftOnly:true,inner:true,rightOnly:true}}].map((preset) => <button key={preset.key} className={joinPresetKey === preset.key ? 'active' : ''} onClick={() => setJoinParts(preset.parts)}>{joinPresetKey === preset.key ? '✓ ' : ''}{preset.label}</button>)}</div>
+            </div>
+            {joinPreview && <div className="joinResult" aria-live="polite"><span className={joinParts.inner ? 'included' : 'excluded'}><strong>{joinPreview.matched.toLocaleString('fr-FR')}</strong> correspondances</span><span className={joinParts.leftOnly ? 'included' : 'excluded'}><strong>{joinPreview.leftOnly.toLocaleString('fr-FR')}</strong> A uniquement</span><span className={joinParts.rightOnly ? 'included' : 'excluded'}><strong>{joinPreview.rightOnly.toLocaleString('fr-FR')}</strong> B uniquement</span><span className="resultTotal"><strong>{joinPreview.rows.length.toLocaleString('fr-FR')}</strong> lignes en sortie</span></div>}
           </div>}
           {previewStats && <div className="liveStats" aria-live="polite"><span><strong>{previewStats.duplicates.toLocaleString('fr-FR')}</strong> doublon(s) détecté(s)</span><i></i><span><strong>{previewStats.remaining.toLocaleString('fr-FR')}</strong> lignes après traitement</span></div>}
           <button className="primary" disabled={busy || (mode !== 'dedupe' && files.length < 2)} onClick={process}>{mode === 'dedupe' ? 'Supprimer les doublons' : mode === 'merge' ? 'Fusionner et télécharger' : mode === 'merge-dedupe' ? 'Fusionner, dédoublonner et télécharger' : 'Créer la jointure et télécharger'} <span>→</span></button>
