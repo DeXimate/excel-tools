@@ -10,8 +10,7 @@
     "build": "vinext build",
     "start": "vinext start",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
-    "predeploy": "vinext build",
-    "deploy": "gh-pages -d dist/client -b gh-pages"
+    "predeploy": "vinext build"
   },
   "dependencies": {
     "next": "16.2.6",
@@ -36,8 +35,7 @@
     "typescript": "5.9.3",
     "vinext": "1.0.0-beta.3",
     "vite": "8.0.13",
-    "wrangler": "4.92.0",
-    "gh-pages": "^5.0.0"
+    "wrangler": "4.92.0"
   },
   "type": "module"
 }
