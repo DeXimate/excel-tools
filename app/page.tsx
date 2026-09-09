@@ -110,6 +110,22 @@ function getJoinHeaders(left: TableFile, right: TableFile) {
   return [...left.headers, ...right.headers.map((header) => left.headers.includes(header) ? `${header}_droite` : header)];
 }
 
+function ColumnSelect({ value, options, onChange, label }: { value: string; options: string[]; onChange: (value: string) => void; label: string }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const root = useRef<HTMLDivElement>(null);
+  const filtered = options.filter((option) => normalize(option).includes(normalize(query)));
+  useEffect(() => {
+    const close = (event: MouseEvent) => { if (!root.current?.contains(event.target as Node)) { setOpen(false); setQuery(''); } };
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, []);
+  return <div className={`columnSelect ${open ? 'open' : ''}`} ref={root}>
+    <button type="button" className="columnSelectTrigger" aria-label={label} aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen((current) => !current)}><span>{value || 'Choisir une colonne'}</span><b>⌄</b></button>
+    {open && <div className="columnSelectMenu"><div className="columnSearch"><span>⌕</span><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape') { setOpen(false); setQuery(''); } }} placeholder="Rechercher une colonne…" aria-label="Rechercher une colonne" /></div><div className="columnOptions" role="listbox" aria-label={label}>{filtered.length ? filtered.map((option) => <button type="button" role="option" aria-selected={option === value} className={option === value ? 'selected' : ''} key={option} onClick={() => { onChange(option); setOpen(false); setQuery(''); }}><span title={option}>{option}</span>{option === value && <b>✓</b>}</button>) : <p>Aucune colonne trouvée</p>}</div><small>{filtered.length} colonne{filtered.length > 1 ? 's' : ''}</small></div>}
+  </div>;
+}
+
 export default function Home() {
   const [mode, setMode] = useState<Mode>('dedupe'); const [files, setFiles] = useState<TableFile[]>([]);
   const [keys, setKeys] = useState<string[]>([]); const [keep, setKeep] = useState<'first' | 'last'>('first');
@@ -257,7 +273,7 @@ export default function Home() {
           {(mode === 'merge' || mode === 'merge-dedupe') && <div className={`compat ${allCompatible ? '' : 'error'}`}><span>{allCompatible ? '✓' : '!'}</span><div><strong>{allCompatible ? 'Colonnes compatibles' : 'Colonnes incompatibles'}</strong><small>{allCompatible ? 'Les fichiers seront réunis dans l’ordre affiché.' : 'Chaque fichier doit contenir exactement les mêmes colonnes.'}</small></div></div>}
           {(mode === 'dedupe' || mode === 'merge-dedupe') && <div className="options"><div className="keySelectionHead"><div><label>Colonnes utilisées pour identifier un doublon</label><small>{keys.length} sur {files[0].headers.length} sélectionnée(s)</small></div><div><button onClick={() => setKeys([...files[0].headers])}>Tout sélectionner</button><button onClick={() => setKeys([])}>Tout désélectionner</button></div></div><div className="chips keyChips">{files[0].headers.map((header) => <button key={header} className={keys.includes(header) ? 'selected' : ''} onClick={() => setKeys(keys.includes(header) ? keys.filter((key) => key !== header) : [...keys, header])}>{keys.includes(header) ? '✓ ' : ''}{header}</button>)}</div><label>Occurrence à conserver</label><div className="radio"><button className={keep === 'first' ? 'selected' : ''} onClick={() => setKeep('first')}>◉ Première ligne</button><button className={keep === 'last' ? 'selected' : ''} onClick={() => setKeep('last')}>◉ Dernière ligne</button></div></div>}
           {mode === 'join' && files.length === 2 && <div className="joinBuilder">
-            <div className="joinKeys"><label><span>Table A · clé de jointure</span><select value={leftKey} onChange={(e) => setLeftKey(e.target.value)}>{files[0].headers.map((header) => <option key={header}>{header}</option>)}</select></label><div className="joinLink"><span></span><b>=</b><span></span></div><label><span>Table B · clé de jointure</span><select value={rightKey} onChange={(e) => setRightKey(e.target.value)}>{files[1].headers.map((header) => <option key={header}>{header}</option>)}</select></label></div>
+            <div className="joinKeys"><label><span>Table A · clé de jointure</span><ColumnSelect label="Clé de jointure de la table A" value={leftKey} options={files[0].headers} onChange={setLeftKey} /></label><div className="joinLink"><span></span><b>=</b><span></span></div><label><span>Table B · clé de jointure</span><ColumnSelect label="Clé de jointure de la table B" value={rightKey} options={files[1].headers} onChange={setRightKey} /></label></div>
             {smartJoin && <div className="smartSuggestion"><span className="smartIcon">✦</span><div><strong>Clés détectées automatiquement</strong><small>{smartJoin.left} ↔ {smartJoin.right}</small></div><button onClick={() => { setLeftKey(smartJoin.left); setRightKey(smartJoin.right); }}>Utiliser cette suggestion</button></div>}
             <div className="joinTypes">
               <div className="joinTypeHeading"><label>Sélection : <strong>{joinLabel}</strong></label><button className="joinHelpButton" aria-label="Comprendre les zones de jointure" aria-expanded={showJoinHelp} onClick={() => setShowJoinHelp(!showJoinHelp)}>?</button></div>
