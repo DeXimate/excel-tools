@@ -2,9 +2,10 @@
 
 import { ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from 'react';
 import * as XLSX from 'xlsx';
-type Mode = 'dedupe' | 'merge' | 'merge-dedupe' | 'join';
+type Mode = 'dedupe' | 'merge' | 'merge-dedupe' | 'join' | 'convert';
+type ConversionFormat = 'xlsx' | 'xls' | 'csv';
 type JoinParts = { leftOnly: boolean; inner: boolean; rightOnly: boolean };
-type TableFile = { name: string; headers: string[]; rows: Record<string, unknown>[] };
+type TableFile = { name: string; headers: string[]; rows: Record<string, unknown>[]; detectedDelimiter?: string };
 type ModeWorkspace = {
   files: TableFile[];
   keys: string[];
@@ -13,21 +14,47 @@ type ModeWorkspace = {
   rightKey: string;
   joinParts: JoinParts;
   outputColumns: string[] | null;
+  conversionFormat: ConversionFormat;
+  csvDelimiter: string;
   message: string;
 };
 const accepted = '.xlsx,.xls,.csv';
 
 async function readExcel(file: File): Promise<TableFile> {
-  const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true });
+  let detectedDelimiter: string | undefined;
+  let workbook: XLSX.WorkBook;
+  if (/\.csv$/i.test(file.name)) {
+    const text = await file.text();
+    detectedDelimiter = detectDelimiter(text);
+    workbook = XLSX.read(text, { type: 'string', cellDates: true, FS: detectedDelimiter });
+  } else workbook = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true });
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
   const matrix = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: '' });
   const headers = (matrix[0] ?? []).map((value, index) => String(value || `Colonne ${index + 1}`).trim());
   const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '', raw: false });
-  return { name: file.name, headers, rows };
+  return { name: file.name, headers, rows, detectedDelimiter };
 }
 function saveWorkbook(rows: Record<string, unknown>[], name: string, headers?: string[]) {
   const sheet = XLSX.utils.json_to_sheet(rows, headers ? { header: headers } : undefined);
   const book = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(book, sheet, 'Résultat'); XLSX.writeFile(book, name);
+}
+function detectDelimiter(text: string) {
+  const candidates = [',', ';', '\t', '|'];
+  const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/).filter((line) => line.trim()).slice(0, 12);
+  let best = { delimiter: ',', score: -1 };
+  for (const delimiter of candidates) {
+    const counts = lines.map((line) => { let count = 0; let quoted = false; for (let i = 0; i < line.length; i++) { if (line[i] === '"') quoted = !quoted; else if (line[i] === delimiter && !quoted) count++; } return count; });
+    const positive = counts.filter(Boolean); const consistency = positive.length ? positive.filter((count) => count === positive[0]).length / lines.length : 0;
+    const score = consistency * 100 + (positive[0] ?? 0);
+    if (positive.length && score > best.score) best = { delimiter, score };
+  }
+  return best.delimiter;
+}
+function saveConversion(rows: Record<string, unknown>[], headers: string[], sourceName: string, format: ConversionFormat, delimiter: string) {
+  const sheet = XLSX.utils.json_to_sheet(rows, { header: headers });
+  const book = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(book, sheet, 'Données');
+  const base = sourceName.replace(/\.[^.]+$/, '');
+  XLSX.writeFile(book, `${base}_converti.${format}`, format === 'csv' ? { bookType: 'csv', FS: delimiter } : { bookType: format });
 }
 
 const normalize = (value: unknown) => String(value ?? '').trim().toLocaleLowerCase('fr').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '');
@@ -66,6 +93,8 @@ export default function Home() {
   const [keys, setKeys] = useState<string[]>([]); const [keep, setKeep] = useState<'first' | 'last'>('first');
   const [leftKey, setLeftKey] = useState(''); const [rightKey, setRightKey] = useState(''); const [joinParts, setJoinParts] = useState<JoinParts>({ leftOnly: false, inner: true, rightOnly: false });
   const [outputColumns, setOutputColumns] = useState<string[] | null>(null);
+  const [conversionFormat, setConversionFormat] = useState<ConversionFormat>('xlsx');
+  const [csvDelimiter, setCsvDelimiter] = useState(';');
   const [showJoinHelp, setShowJoinHelp] = useState(false);
   const [duplicatePage, setDuplicatePage] = useState(0);
   const [busy, setBusy] = useState(false); const [dragging, setDragging] = useState(false); const [message, setMessage] = useState('');
@@ -75,7 +104,7 @@ export default function Home() {
   const workspaces = useRef<Partial<Record<Mode, ModeWorkspace>>>({});
   const switchMode = (next: Mode) => {
     if (next === mode) return;
-    workspaces.current[mode] = { files, keys, keep, leftKey, rightKey, joinParts, outputColumns, message };
+    workspaces.current[mode] = { files, keys, keep, leftKey, rightKey, joinParts, outputColumns, conversionFormat, csvDelimiter, message };
     const saved = workspaces.current[next];
     setMode(next);
     setFiles(saved?.files ?? []);
@@ -85,6 +114,8 @@ export default function Home() {
     setRightKey(saved?.rightKey ?? '');
     setJoinParts(saved?.joinParts ?? { leftOnly: false, inner: true, rightOnly: false });
     setOutputColumns(saved?.outputColumns ?? null);
+    setConversionFormat(saved?.conversionFormat ?? 'xlsx');
+    setCsvDelimiter(saved?.csvDelimiter ?? ';');
     setShowJoinHelp(false);
     setMessage(saved?.message ?? '');
     setDragging(false);
@@ -135,13 +166,17 @@ export default function Home() {
     const selected = Array.from(list).filter((file) => /\.(xlsx?|csv)$/i.test(file.name));
     if (!selected.length) { setMessage('Choisissez un fichier Excel ou CSV valide.'); return; }
     setBusy(true); setMessage('');
-    try { const parsed = await Promise.all(selected.map(readExcel)); setFiles(mode === 'dedupe' ? [parsed[0]] : (current) => mode === 'join' ? [...current, ...parsed].slice(0, 2) : [...current, ...parsed]); if (mode !== 'merge' && mode !== 'join' && !keys.length) setKeys(parsed[0].headers); }
+    try { const parsed = await Promise.all(selected.map(readExcel)); setFiles(mode === 'dedupe' || mode === 'convert' ? [parsed[0]] : (current) => mode === 'join' ? [...current, ...parsed].slice(0, 2) : [...current, ...parsed]); if (mode !== 'merge' && mode !== 'join' && mode !== 'convert' && !keys.length) setKeys(parsed[0].headers); if (mode === 'convert') { const isCsv = /\.csv$/i.test(parsed[0].name); setConversionFormat(isCsv ? 'xlsx' : 'csv'); if (parsed[0].detectedDelimiter) setCsvDelimiter(parsed[0].detectedDelimiter); } }
     catch { setMessage('Impossible de lire ce fichier. Vérifiez son format.'); } finally { setBusy(false); }
   }
   function onDrop(event: DragEvent<HTMLDivElement>) { event.preventDefault(); setDragging(false); addFiles(event.dataTransfer.files); }
   function process() {
     if (!files.length) return;
-    if (mode === 'join') {
+    if (mode === 'convert') {
+      if (!selectedOutputColumns.length) { setMessage('Sélectionnez au moins une colonne pour le fichier final.'); return; }
+      saveConversion(selectColumns(files[0].rows, selectedOutputColumns), selectedOutputColumns, files[0].name, conversionFormat, csvDelimiter);
+      setMessage(`${files[0].rows.length.toLocaleString('fr-FR')} lignes converties au format ${conversionFormat.toUpperCase()}.`);
+    } else if (mode === 'join') {
       if (files.length !== 2 || !leftKey || !rightKey) { setMessage('Ajoutez deux fichiers et choisissez les deux clés de jointure.'); return; }
       if (!selectedOutputColumns.length) { setMessage('Sélectionnez au moins une colonne pour le fichier final.'); return; }
       const result = createJoin(files[0], files[1], leftKey, rightKey, joinParts); saveWorkbook(selectColumns(result.rows, selectedOutputColumns), 'jointure_excel.xlsx', selectedOutputColumns); setMessage(`${result.rows.length.toLocaleString('fr-FR')} lignes générées par la jointure.`);
@@ -164,28 +199,28 @@ export default function Home() {
       if (keep === 'last') clean.reverse(); saveWorkbook(selectColumns(clean, selectedOutputColumns), 'fusion_sans_doublons.xlsx', selectedOutputColumns); setMessage(`${files.length} fichiers fusionnés · ${merged.length - clean.length} doublon(s) supprimé(s) · ${clean.length.toLocaleString('fr-FR')} lignes conservées.`);
     }
   }
-  const title = mode === 'dedupe' ? 'Supprimer les doublons' : mode === 'merge' ? 'Fusionner des fichiers' : mode === 'merge-dedupe' ? 'Fusionner et dédoublonner' : 'Créer une jointure';
-  const description = mode === 'dedupe' ? 'Détectez les lignes identiques selon les colonnes de votre choix.' : mode === 'merge' ? 'Regroupez les lignes de fichiers qui possèdent les mêmes colonnes.' : mode === 'merge-dedupe' ? 'Réunissez vos fichiers, puis retirez les doublons en une seule opération.' : 'Reliez deux tableaux grâce à une colonne commune.';
+  const title = mode === 'dedupe' ? 'Supprimer les doublons' : mode === 'merge' ? 'Fusionner des fichiers' : mode === 'merge-dedupe' ? 'Fusionner et dédoublonner' : mode === 'join' ? 'Créer une jointure' : 'Convertir un fichier';
+  const description = mode === 'dedupe' ? 'Détectez les lignes identiques selon les colonnes de votre choix.' : mode === 'merge' ? 'Regroupez les lignes de fichiers qui possèdent les mêmes colonnes.' : mode === 'merge-dedupe' ? 'Réunissez vos fichiers, puis retirez les doublons en une seule opération.' : mode === 'join' ? 'Reliez deux tableaux grâce à une colonne commune.' : 'Convertissez Excel et CSV dans les deux sens, directement sur votre appareil.';
   return <main>
     <nav><a className="brand" href="#"><span className="brandmark">X</span><span>Excel<span>Flow</span> <small>by Dhafer</small></span></a><div className="privacy"><span>✓</span> Vos fichiers restent sur votre appareil</div></nav>
     <section className="hero"><div className="eyebrow">OUTILS EXCEL, SANS COMPLICATION</div><h1>Vos fichiers Excel,<br/><em>propres et réunis.</em></h1></section>
     <section className="workspace">
-      <div className="tabs" role="tablist"><button className={mode === 'dedupe' ? 'active' : ''} onClick={() => switchMode('dedupe')}><span className="tabicon">⌁</span> Supprimer les doublons</button><button className={mode === 'merge' ? 'active' : ''} onClick={() => switchMode('merge')}><span className="tabicon">⊕</span> Fusionner</button><button className={mode === 'merge-dedupe' ? 'active' : ''} onClick={() => switchMode('merge-dedupe')}><span className="tabicon">◎</span> Fusionner + dédoublonner</button><button className={mode === 'join' ? 'active' : ''} onClick={() => switchMode('join')}><span className="tabicon">⌘</span> Jointure</button></div>
+      <div className="tabs" role="tablist"><button className={mode === 'dedupe' ? 'active' : ''} onClick={() => switchMode('dedupe')}><span className="tabicon">⌁</span> Supprimer les doublons</button><button className={mode === 'merge' ? 'active' : ''} onClick={() => switchMode('merge')}><span className="tabicon">⊕</span> Fusionner</button><button className={mode === 'merge-dedupe' ? 'active' : ''} onClick={() => switchMode('merge-dedupe')}><span className="tabicon">◎</span> Fusionner + dédoublonner</button><button className={mode === 'join' ? 'active' : ''} onClick={() => switchMode('join')}><span className="tabicon">⌘</span> Jointure</button><button className={mode === 'convert' ? 'active' : ''} onClick={() => switchMode('convert')}><span className="tabicon">⇄</span> Convertir</button></div>
       <div className="toolcard">
         <div className="toolhead"><div><span className="step">01</span><h2>{title}</h2><p>{description}</p></div><div className="format">XLSX&nbsp;&nbsp; XLS&nbsp;&nbsp; CSV</div></div>
-        <input ref={input} hidden type="file" accept={accepted} multiple={mode !== 'dedupe'} onChange={(e: ChangeEvent<HTMLInputElement>) => e.target.files && addFiles(e.target.files)} />
+        <input ref={input} hidden type="file" accept={accepted} multiple={mode !== 'dedupe' && mode !== 'convert'} onChange={(e: ChangeEvent<HTMLInputElement>) => e.target.files && addFiles(e.target.files)} />
         <input ref={folderInput} hidden type="file" accept={accepted} multiple {...({ webkitdirectory: '', directory: '' } as Record<string, string>)} onChange={(e: ChangeEvent<HTMLInputElement>) => e.target.files && addFiles(e.target.files)} />
         <div className={`dropzone ${dragging ? 'dragging' : ''} ${busy ? 'isLoading' : ''}`} aria-busy={busy} onClick={() => !busy && input.current?.click()} onPointerMove={(e) => { const box = e.currentTarget.getBoundingClientRect(); e.currentTarget.style.setProperty('--mouse-x', `${e.clientX - box.left}px`); e.currentTarget.style.setProperty('--mouse-y', `${e.clientY - box.top}px`); }} onDragOver={(e) => { e.preventDefault(); if (!busy) setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={onDrop}>
           <div className={`uploadIcon ${busy ? 'loading' : ''}`}>{busy ? <span className="spinner" /> : <span className="arrow">⇧</span>}</div>
-          <strong>{busy ? 'Analyse de vos données…' : dragging ? 'Relâchez pour importer' : mode !== 'dedupe' ? 'Déposez vos fichiers ici' : 'Déposez votre fichier ici'}</strong>
+          <strong>{busy ? 'Analyse de vos données…' : dragging ? 'Relâchez pour importer' : mode === 'dedupe' || mode === 'convert' ? 'Déposez votre fichier ici' : 'Déposez vos fichiers ici'}</strong>
           <span>{busy ? 'Lecture des colonnes et des lignes' : 'ou cliquez pour parcourir'}</span>
-          {busy ? <div className="loadingTrack"><span /></div> : <small>{mode !== 'dedupe' ? 'Plusieurs fichiers autorisés · ' : ''}50 Mo maximum par fichier</small>}
+          {busy ? <div className="loadingTrack"><span /></div> : <small>{mode !== 'dedupe' && mode !== 'convert' ? 'Plusieurs fichiers autorisés · ' : ''}50 Mo maximum par fichier</small>}
         </div>
-        {!files.length && mode !== 'dedupe' && mode !== 'join' && <button className="folderEntry" onClick={() => folderInput.current?.click()}><span>▣</span><div><strong>Importer tout un dossier</strong><small>Seuls les fichiers Excel et CSV du dossier seront ajoutés.</small></div><b>Choisir un dossier →</b></button>}
+        {!files.length && (mode === 'merge' || mode === 'merge-dedupe') && <button className="folderEntry" onClick={() => folderInput.current?.click()}><span>▣</span><div><strong>Importer tout un dossier</strong><small>Seuls les fichiers Excel et CSV du dossier seront ajoutés.</small></div><b>Choisir un dossier →</b></button>}
         {!!files.length && <div className="settings">
-          <div className="filelist">{files.map((file, index) => <div className="file" key={`${file.name}-${index}`}><span className="fileIcon">{mode === 'join' ? index === 0 ? 'A' : 'B' : 'XL'}</span><div><strong>{file.name}</strong><small>{file.rows.length.toLocaleString('fr-FR')} lignes · {file.headers.length} colonnes</small></div><button aria-label={`Retirer ${file.name}`} onClick={() => setFiles(files.filter((_, i) => i !== index))}>×</button></div>)}{mode !== 'dedupe' && (mode !== 'join' || files.length < 2) && <div className="addActions"><button className="addmore" onClick={() => input.current?.click()}>+ Ajouter {mode === 'join' ? 'le second fichier' : 'des fichiers'}</button>{mode !== 'join' && <button className="addmore folderButton" onClick={() => folderInput.current?.click()}>▣ Importer un dossier</button>}</div>}</div>
-          {mode !== 'dedupe' && mode !== 'join' && <div className={`compat ${allCompatible ? '' : 'error'}`}><span>{allCompatible ? '✓' : '!'}</span><div><strong>{allCompatible ? 'Colonnes compatibles' : 'Colonnes incompatibles'}</strong><small>{allCompatible ? 'Les fichiers seront réunis dans l’ordre affiché.' : 'Chaque fichier doit contenir exactement les mêmes colonnes.'}</small></div></div>}
-          {mode !== 'merge' && mode !== 'join' && <div className="options"><label>Colonnes utilisées pour identifier un doublon</label><div className="chips">{files[0].headers.map((header) => <button key={header} className={keys.includes(header) ? 'selected' : ''} onClick={() => setKeys(keys.includes(header) ? keys.filter((key) => key !== header) : [...keys, header])}>{keys.includes(header) ? '✓ ' : ''}{header}</button>)}</div><label>Occurrence à conserver</label><div className="radio"><button className={keep === 'first' ? 'selected' : ''} onClick={() => setKeep('first')}>◉ Première ligne</button><button className={keep === 'last' ? 'selected' : ''} onClick={() => setKeep('last')}>◉ Dernière ligne</button></div></div>}
+          <div className="filelist">{files.map((file, index) => <div className="file" key={`${file.name}-${index}`}><span className="fileIcon">{mode === 'join' ? index === 0 ? 'A' : 'B' : mode === 'convert' ? file.name.split('.').pop()?.toUpperCase() : 'XL'}</span><div><strong>{file.name}</strong><small>{file.rows.length.toLocaleString('fr-FR')} lignes · {file.headers.length} colonnes</small></div><button aria-label={`Retirer ${file.name}`} onClick={() => setFiles(files.filter((_, i) => i !== index))}>×</button></div>)}{mode !== 'dedupe' && mode !== 'convert' && (mode !== 'join' || files.length < 2) && <div className="addActions"><button className="addmore" onClick={() => input.current?.click()}>+ Ajouter {mode === 'join' ? 'le second fichier' : 'des fichiers'}</button>{mode !== 'join' && <button className="addmore folderButton" onClick={() => folderInput.current?.click()}>▣ Importer un dossier</button>}</div>}</div>
+          {(mode === 'merge' || mode === 'merge-dedupe') && <div className={`compat ${allCompatible ? '' : 'error'}`}><span>{allCompatible ? '✓' : '!'}</span><div><strong>{allCompatible ? 'Colonnes compatibles' : 'Colonnes incompatibles'}</strong><small>{allCompatible ? 'Les fichiers seront réunis dans l’ordre affiché.' : 'Chaque fichier doit contenir exactement les mêmes colonnes.'}</small></div></div>}
+          {(mode === 'dedupe' || mode === 'merge-dedupe') && <div className="options"><label>Colonnes utilisées pour identifier un doublon</label><div className="chips">{files[0].headers.map((header) => <button key={header} className={keys.includes(header) ? 'selected' : ''} onClick={() => setKeys(keys.includes(header) ? keys.filter((key) => key !== header) : [...keys, header])}>{keys.includes(header) ? '✓ ' : ''}{header}</button>)}</div><label>Occurrence à conserver</label><div className="radio"><button className={keep === 'first' ? 'selected' : ''} onClick={() => setKeep('first')}>◉ Première ligne</button><button className={keep === 'last' ? 'selected' : ''} onClick={() => setKeep('last')}>◉ Dernière ligne</button></div></div>}
           {mode === 'join' && files.length === 2 && <div className="joinBuilder">
             <div className="joinKeys"><label><span>Table A · clé de jointure</span><select value={leftKey} onChange={(e) => setLeftKey(e.target.value)}>{files[0].headers.map((header) => <option key={header}>{header}</option>)}</select></label><div className="joinLink"><span></span><b>=</b><span></span></div><label><span>Table B · clé de jointure</span><select value={rightKey} onChange={(e) => setRightKey(e.target.value)}>{files[1].headers.map((header) => <option key={header}>{header}</option>)}</select></label></div>
             {smartJoin && <div className="smartSuggestion"><span className="smartIcon">✦</span><div><strong>Clés détectées automatiquement</strong><small>{smartJoin.left} ↔ {smartJoin.right}</small></div><button onClick={() => { setLeftKey(smartJoin.left); setRightKey(smartJoin.right); }}>Utiliser cette suggestion</button></div>}
@@ -208,6 +243,12 @@ export default function Home() {
             </div>
             {joinPreview && <div className="joinResult" aria-live="polite"><span className={joinParts.inner ? 'included' : 'excluded'}><strong>{joinPreview.matched.toLocaleString('fr-FR')}</strong> correspondances</span><span className={joinParts.leftOnly ? 'included' : 'excluded'}><strong>{joinPreview.leftOnly.toLocaleString('fr-FR')}</strong> A uniquement</span><span className={joinParts.rightOnly ? 'included' : 'excluded'}><strong>{joinPreview.rightOnly.toLocaleString('fr-FR')}</strong> B uniquement</span><span className="resultTotal"><strong>{joinPreview.rows.length.toLocaleString('fr-FR')}</strong> lignes en sortie</span></div>}
           </div>}
+          {mode === 'convert' && <div className="converter">
+            {/\.csv$/i.test(files[0].name) && <div className="delimiterDetection"><span>✦</span><div><strong>Séparateur détecté automatiquement</strong><small>{csvDelimiter === ',' ? 'Virgule (,)' : csvDelimiter === ';' ? 'Point-virgule (;)' : csvDelimiter === '\t' ? 'Tabulation' : 'Barre verticale (|)'}</small></div><b>Détection intelligente</b></div>}
+            <div className="conversionFlow"><div className="sourceFormat"><span>Format source</span><strong>{files[0].name.split('.').pop()?.toUpperCase()}</strong><small>{files[0].rows.length.toLocaleString('fr-FR')} lignes reconnues</small></div><div className="flowArrow"><i></i><b>→</b><i></i></div><div className="targetFormat"><span>Convertir vers</span><div className="formatChoices">{(['xlsx','xls','csv'] as ConversionFormat[]).map((format) => <button key={format} disabled={files[0].name.toLowerCase().endsWith(`.${format}`)} className={conversionFormat === format ? 'active' : ''} onClick={() => setConversionFormat(format)}><b>{format.toUpperCase()}</b><small>{format === 'csv' ? 'Texte universel' : format === 'xls' ? 'Ancien Excel' : 'Excel moderne'}</small></button>)}</div></div></div>
+            {conversionFormat === 'csv' && <div className="delimiterChoice"><div><label>Séparateur du fichier CSV</label><small>Le choix recommandé dépend des paramètres régionaux d’Excel.</small></div><div>{[{value:';',label:'Point-virgule',symbol:';'},{value:',',label:'Virgule',symbol:','},{value:'\t',label:'Tabulation',symbol:'TAB'},{value:'|',label:'Barre verticale',symbol:'|'}].map((item) => <button key={item.value} className={csvDelimiter === item.value ? 'active' : ''} onClick={() => setCsvDelimiter(item.value)}><b>{item.symbol}</b><span>{item.label}</span></button>)}</div></div>}
+            <div className="conversionPreview"><div><strong>Aperçu des données</strong><small>5 premières lignes après lecture du fichier</small></div><div className="conversionTableWrap"><table><thead><tr>{files[0].headers.map((header) => <th key={header}>{header}</th>)}</tr></thead><tbody>{files[0].rows.slice(0,5).map((row,index) => <tr key={index}>{files[0].headers.map((header) => <td key={header}>{String(row[header] ?? '') || <em>vide</em>}</td>)}</tr>)}</tbody></table></div></div>
+          </div>}
           {!!availableOutputColumns.length && <div className="outputColumns"><div className="outputHeading"><div><label>Colonnes du fichier final</label><small>{selectedOutputColumns.length} sur {availableOutputColumns.length} sélectionnée(s)</small></div><div><button onClick={() => setOutputColumns([...availableOutputColumns])}>Tout sélectionner</button><button onClick={() => setOutputColumns([])}>Tout retirer</button></div></div><div className="chips">{availableOutputColumns.map((column) => <button key={column} className={selectedOutputColumns.includes(column) ? 'selected' : ''} onClick={() => setOutputColumns(selectedOutputColumns.includes(column) ? selectedOutputColumns.filter((item) => item !== column) : [...selectedOutputColumns, column])}>{selectedOutputColumns.includes(column) ? '✓ ' : ''}{column}</button>)}</div></div>}
           {previewStats && <div className="liveStats" aria-live="polite"><span><strong>{previewStats.duplicates.toLocaleString('fr-FR')}</strong> doublon(s) détecté(s)</span><i></i><span><strong>{previewStats.remaining.toLocaleString('fr-FR')}</strong> lignes après traitement</span></div>}
           {mode === 'dedupe' && duplicateRows.length > 0 && <section className="duplicatePanel" aria-label="Liste complète des doublons">
@@ -215,7 +256,7 @@ export default function Home() {
             <div className="duplicateTableWrap"><table className="duplicateTable"><thead><tr><th>N° ligne</th>{files[0].headers.map((header) => <th key={header}>{header}</th>)}</tr></thead><tbody>{visibleDuplicateRows.map((item) => <tr key={item.rowNumber}><td>{item.rowNumber}</td>{files[0].headers.map((header) => <td key={header} title={String(item.row[header] ?? '')}>{String(item.row[header] ?? '') || <em>vide</em>}</td>)}</tr>)}</tbody></table></div>
             <div className="duplicatePager"><span>Lignes {(duplicatePage * duplicatePageSize + 1).toLocaleString('fr-FR')}–{Math.min((duplicatePage + 1) * duplicatePageSize, duplicateRows.length).toLocaleString('fr-FR')} sur {duplicateRows.length.toLocaleString('fr-FR')}</span><div><button disabled={duplicatePage === 0} onClick={() => setDuplicatePage((page) => Math.max(0, page - 1))}>← Précédent</button><b>{duplicatePage + 1} / {duplicatePageCount}</b><button disabled={duplicatePage >= duplicatePageCount - 1} onClick={() => setDuplicatePage((page) => Math.min(duplicatePageCount - 1, page + 1))}>Suivant →</button></div></div>
           </section>}
-          <button className="primary" disabled={busy || (mode !== 'dedupe' && files.length < 2)} onClick={process}>{mode === 'dedupe' ? 'Supprimer les doublons' : mode === 'merge' ? 'Fusionner et télécharger' : mode === 'merge-dedupe' ? 'Fusionner, dédoublonner et télécharger' : 'Créer la jointure et télécharger'} <span>→</span></button>
+          <button className="primary" disabled={busy || ((mode === 'merge' || mode === 'merge-dedupe' || mode === 'join') && files.length < 2)} onClick={process}>{mode === 'dedupe' ? 'Supprimer les doublons' : mode === 'merge' ? 'Fusionner et télécharger' : mode === 'merge-dedupe' ? 'Fusionner, dédoublonner et télécharger' : mode === 'join' ? 'Créer la jointure et télécharger' : `Convertir en ${conversionFormat.toUpperCase()} et télécharger`} <span>→</span></button>
         </div>}{message && <div className="message" role="status">{message}</div>}
       </div>
     </section>
