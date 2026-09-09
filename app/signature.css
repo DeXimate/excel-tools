@@ -192,9 +192,39 @@
   .dropzone *, .dropzone::before { animation: none !important; transition: none !important; }
 }
 
-.tabs { overflow-x: auto; scrollbar-width: none; }
-.tabs::-webkit-scrollbar { display: none; }
-.tabs button { flex: 0 0 auto; white-space: nowrap; }
+.tabs {
+  display: grid;
+  grid-template-columns: 1.2fr .85fr 1.45fr .75fr .8fr;
+  gap: 4px;
+  width: 100%;
+  overflow: visible;
+}
+.tabs button {
+  min-width: 0;
+  padding-inline: 10px;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.tabs .tabicon {
+  margin-right: 5px;
+  font-size: 16px;
+}
+
+@media (max-width: 700px) {
+  .tabs {
+    display: flex;
+    gap: 4px;
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+    scrollbar-width: none;
+    scroll-snap-type: x proximity;
+  }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tabs button {
+    flex: 0 0 auto;
+    scroll-snap-align: start;
+  }
+}
 
 .joinBuilder { margin-top: 22px; padding: 22px; border: 1px solid #dce5df; border-radius: 12px; background: linear-gradient(145deg,#f9fcfa,#f3f8f5); }
 .joinKeys { display: grid; grid-template-columns: minmax(0,1fr) 110px minmax(0,1fr); align-items: end; gap: 16px; }
