@@ -142,14 +142,25 @@ export default function Home() {
     if (keep === 'last') {
       const lastIndexes = new Map<string, number>();
       rows.forEach((row, index) => lastIndexes.set(signature(row), index));
-      return rows.flatMap((row, index) => lastIndexes.get(signature(row)) !== index ? [{ row, rowNumber: index + 2 }] : []);
+      return rows.flatMap((row, index) => {
+        const keptIndex = lastIndexes.get(signature(row));
+        return keptIndex !== index && keptIndex !== undefined ? [{ row, rowNumber: index + 2, keptRow: rows[keptIndex], keptRowNumber: keptIndex + 2, signature: signature(row) }] : [];
+      });
     }
-    const seen = new Set<string>();
-    return rows.flatMap((row, index) => { const value = signature(row); if (seen.has(value)) return [{ row, rowNumber: index + 2 }]; seen.add(value); return []; });
+    const seen = new Map<string, { row: Record<string, unknown>; rowNumber: number }>();
+    return rows.flatMap((row, index) => { const value = signature(row); const kept = seen.get(value); if (kept) return [{ row, rowNumber: index + 2, keptRow: kept.row, keptRowNumber: kept.rowNumber, signature: value }]; seen.set(value, { row, rowNumber: index + 2 }); return []; });
   }, [files, keep, keys, mode]);
+  const duplicateDisplayRows = useMemo(() => {
+    const groups = new Map<string, typeof duplicateRows>();
+    duplicateRows.forEach((item) => groups.set(item.signature, [...(groups.get(item.signature) ?? []), item]));
+    return Array.from(groups.values()).flatMap((items, groupIndex) => [
+      { row: items[0].keptRow, rowNumber: items[0].keptRowNumber, status: 'Conservée', group: groupIndex + 1 },
+      ...items.map((item) => ({ row: item.row, rowNumber: item.rowNumber, status: 'Supprimée', group: groupIndex + 1 })),
+    ]);
+  }, [duplicateRows]);
   const duplicatePageSize = 50;
-  const duplicatePageCount = Math.max(1, Math.ceil(duplicateRows.length / duplicatePageSize));
-  const visibleDuplicateRows = duplicateRows.slice(duplicatePage * duplicatePageSize, (duplicatePage + 1) * duplicatePageSize);
+  const duplicatePageCount = Math.max(1, Math.ceil(duplicateDisplayRows.length / duplicatePageSize));
+  const visibleDuplicateRows = duplicateDisplayRows.slice(duplicatePage * duplicatePageSize, (duplicatePage + 1) * duplicatePageSize);
   useEffect(() => { setDuplicatePage(0); }, [files, keep, keys, mode]);
   useEffect(() => { if (mode === 'join' && files[0] && !leftKey) setLeftKey(files[0].headers[0] ?? ''); if (mode === 'join' && files[1] && !rightKey) { const common = files[1].headers.find((header) => header === leftKey); setRightKey(common ?? files[1].headers[0] ?? ''); } }, [files, leftKey, mode, rightKey]);
   const joinPreview = useMemo(() => mode === 'join' && files.length === 2 && leftKey && rightKey ? createJoin(files[0], files[1], leftKey, rightKey, joinParts) : null, [files, joinParts, leftKey, mode, rightKey]);
@@ -257,9 +268,9 @@ export default function Home() {
           {!!availableOutputColumns.length && <div className="outputColumns"><div className="outputHeading"><div><label>Colonnes du fichier final</label><small>{selectedOutputColumns.length} sur {availableOutputColumns.length} sélectionnée(s)</small></div><div><button onClick={() => setOutputColumns([...availableOutputColumns])}>Tout sélectionner</button><button onClick={() => setOutputColumns([])}>Tout retirer</button></div></div><div className="chips">{availableOutputColumns.map((column) => <button key={column} className={selectedOutputColumns.includes(column) ? 'selected' : ''} onClick={() => setOutputColumns(selectedOutputColumns.includes(column) ? selectedOutputColumns.filter((item) => item !== column) : [...selectedOutputColumns, column])}>{selectedOutputColumns.includes(column) ? '✓ ' : ''}{column}</button>)}</div></div>}
           {previewStats && <div className="liveStats" aria-live="polite"><span><strong>{previewStats.duplicates.toLocaleString('fr-FR')}</strong> doublon(s) détecté(s)</span><i></i><span><strong>{previewStats.remaining.toLocaleString('fr-FR')}</strong> lignes après traitement</span></div>}
           {mode === 'dedupe' && duplicateRows.length > 0 && <section className="duplicatePanel" aria-label="Liste complète des doublons">
-            <div className="duplicateHead"><div><span className="duplicateBadge">{duplicateRows.length.toLocaleString('fr-FR')}</span><div><h3>Lignes en double</h3><p>Liste complète des lignes qui seront supprimées.</p></div></div><button onClick={() => saveWorkbook(duplicateRows.map((item) => item.row), `doublons_${files[0].name.replace(/\.[^.]+$/, '')}.xlsx`, files[0].headers)}>Télécharger la liste</button></div>
-            <div className="duplicateTableWrap"><table className="duplicateTable"><thead><tr><th>N° ligne</th>{files[0].headers.map((header) => <th key={header}>{header}</th>)}</tr></thead><tbody>{visibleDuplicateRows.map((item) => <tr key={item.rowNumber}><td>{item.rowNumber}</td>{files[0].headers.map((header) => <td key={header} title={String(item.row[header] ?? '')}>{String(item.row[header] ?? '') || <em>vide</em>}</td>)}</tr>)}</tbody></table></div>
-            <div className="duplicatePager"><span>Lignes {(duplicatePage * duplicatePageSize + 1).toLocaleString('fr-FR')}–{Math.min((duplicatePage + 1) * duplicatePageSize, duplicateRows.length).toLocaleString('fr-FR')} sur {duplicateRows.length.toLocaleString('fr-FR')}</span><div><button disabled={duplicatePage === 0} onClick={() => setDuplicatePage((page) => Math.max(0, page - 1))}>← Précédent</button><b>{duplicatePage + 1} / {duplicatePageCount}</b><button disabled={duplicatePage >= duplicatePageCount - 1} onClick={() => setDuplicatePage((page) => Math.min(duplicatePageCount - 1, page + 1))}>Suivant →</button></div></div>
+            <div className="duplicateHead"><div><span className="duplicateBadge">{duplicateRows.length.toLocaleString('fr-FR')}</span><div><h3>Groupes de doublons</h3><p>Chaque doublon est affiché avec la ligne correspondante qui sera conservée.</p></div></div><button onClick={() => saveWorkbook(duplicateDisplayRows.map((item) => ({ Statut: item.status, Groupe: item.group, 'N° ligne': item.rowNumber, ...item.row })), `doublons_${files[0].name.replace(/\.[^.]+$/, '')}.xlsx`, ['Statut', 'Groupe', 'N° ligne', ...files[0].headers])}>Télécharger la liste</button></div>
+            <div className="duplicateTableWrap"><table className="duplicateTable"><thead><tr><th>Statut</th><th>Groupe</th><th>N° ligne</th>{files[0].headers.map((header) => <th key={header}>{header}</th>)}</tr></thead><tbody>{visibleDuplicateRows.map((item) => <tr className={item.status === 'Conservée' ? 'keptRow' : 'removedRow'} key={`${item.group}-${item.status}-${item.rowNumber}`}><td><span className="rowStatus">{item.status}</span></td><td>#{item.group}</td><td>{item.rowNumber}</td>{files[0].headers.map((header) => <td key={header} title={String(item.row[header] ?? '')}>{String(item.row[header] ?? '') || <em>vide</em>}</td>)}</tr>)}</tbody></table></div>
+            <div className="duplicatePager"><span>Lignes {(duplicatePage * duplicatePageSize + 1).toLocaleString('fr-FR')}–{Math.min((duplicatePage + 1) * duplicatePageSize, duplicateDisplayRows.length).toLocaleString('fr-FR')} sur {duplicateDisplayRows.length.toLocaleString('fr-FR')}</span><div><button disabled={duplicatePage === 0} onClick={() => setDuplicatePage((page) => Math.max(0, page - 1))}>← Précédent</button><b>{duplicatePage + 1} / {duplicatePageCount}</b><button disabled={duplicatePage >= duplicatePageCount - 1} onClick={() => setDuplicatePage((page) => Math.min(duplicatePageCount - 1, page + 1))}>Suivant →</button></div></div>
           </section>}
           <button className="primary" disabled={busy || ((mode === 'merge' || mode === 'merge-dedupe' || mode === 'join') && files.length < 2)} onClick={process}>{mode === 'dedupe' ? 'Supprimer les doublons' : mode === 'merge' ? 'Fusionner et télécharger' : mode === 'merge-dedupe' ? 'Fusionner, dédoublonner et télécharger' : mode === 'join' ? 'Créer la jointure et télécharger' : `Convertir en ${conversionFormat.toUpperCase()} et télécharger`} <span>→</span></button>
         </div>}{message && <div className="message" role="status">{message}</div>}

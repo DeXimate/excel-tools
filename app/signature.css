@@ -52,6 +52,23 @@
   transition: color 160ms ease, background 160ms ease, transform 120ms ease;
 }
 
+.toolcard { border-radius: 0 0 14px 14px; }
+
+.outputColumns .chips {
+  max-height: 170px;
+  overflow-y: auto;
+  align-content: flex-start;
+  padding: 9px;
+  border: 1px solid #e1e7e3;
+  border-radius: 9px;
+  background: #fafbf9;
+  scrollbar-width: thin;
+  scrollbar-color: #9dc7b4 transparent;
+}
+.outputColumns .chips button { padding: 6px 9px; }
+.outputColumns .chips::-webkit-scrollbar { width: 7px; }
+.outputColumns .chips::-webkit-scrollbar-thumb { border-radius: 7px; background: #9dc7b4; }
+
 .tabs button:active,
 .chips button:active,
 .radio button:active {
