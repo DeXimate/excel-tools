@@ -52,9 +52,14 @@ function detectDelimiter(text: string) {
 }
 function saveConversion(rows: Record<string, unknown>[], headers: string[], sourceName: string, format: ConversionFormat, delimiter: string) {
   const sheet = XLSX.utils.json_to_sheet(rows, { header: headers });
-  const book = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(book, sheet, 'Données');
   const base = sourceName.replace(/\.[^.]+$/, '');
-  XLSX.writeFile(book, `${base}_converti.${format}`, format === 'csv' ? { bookType: 'csv', FS: delimiter } : { bookType: format });
+  if (format === 'csv') {
+    const csv = XLSX.utils.sheet_to_csv(sheet, { FS: delimiter });
+    const url = URL.createObjectURL(new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8' }));
+    const link = document.createElement('a'); link.href = url; link.download = `${base}_converti.csv`; link.click(); URL.revokeObjectURL(url);
+  } else {
+    const book = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(book, sheet, 'Données'); XLSX.writeFile(book, `${base}_converti.${format}`, { bookType: format });
+  }
 }
 
 const normalize = (value: unknown) => String(value ?? '').trim().toLocaleLowerCase('fr').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '');
