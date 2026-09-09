@@ -84,13 +84,30 @@ function createJoin(left: TableFile, right: TableFile, leftKey: string, rightKey
   const rightNames = new Map(right.headers.map((header) => [header, left.headers.includes(header) ? `${header}_droite` : header]));
   const headers = [...left.headers, ...right.headers.map((header) => rightNames.get(header)!)];
   const index = new Map<string, { row: Record<string, unknown>; index: number }[]>();
-  right.rows.forEach((row, rowIndex) => { const value = String(row[rightKey] ?? '').trim().toLocaleLowerCase('fr'); const group = index.get(value) ?? []; group.push({ row, index: rowIndex }); index.set(value, group); });
+  right.rows.forEach((row, rowIndex) => { const value = normalize(row[rightKey]); if (!value) return; const group = index.get(value) ?? []; group.push({ row, index: rowIndex }); index.set(value, group); });
   const matchedRight = new Set<number>(); const rows: Record<string, unknown>[] = []; let matched = 0; let leftOnly = 0;
   const combine = (leftRow?: Record<string, unknown>, rightRow?: Record<string, unknown>) => { const result: Record<string, unknown> = {}; left.headers.forEach((header) => { result[header] = leftRow?.[header] ?? ''; }); right.headers.forEach((header) => { result[rightNames.get(header)!] = rightRow?.[header] ?? ''; }); return result; };
-  left.rows.forEach((leftRow) => { const value = String(leftRow[leftKey] ?? '').trim().toLocaleLowerCase('fr'); const matches = index.get(value) ?? []; if (matches.length) { matches.forEach((item) => { if (parts.inner) rows.push(combine(leftRow, item.row)); matchedRight.add(item.index); matched++; }); } else { leftOnly++; if (parts.leftOnly) rows.push(combine(leftRow)); } });
+  left.rows.forEach((leftRow) => { const value = normalize(leftRow[leftKey]); const matches = value ? index.get(value) ?? [] : []; if (matches.length) { matches.forEach((item) => { if (parts.inner) rows.push(combine(leftRow, item.row)); matchedRight.add(item.index); matched++; }); } else { leftOnly++; if (parts.leftOnly) rows.push(combine(leftRow)); } });
   const rightOnly = right.rows.length - matchedRight.size;
   if (parts.rightOnly) right.rows.forEach((rightRow, index) => { if (!matchedRight.has(index)) rows.push(combine(undefined, rightRow)); });
   return { rows, headers, matched, leftOnly, rightOnly };
+}
+
+function countJoin(left: TableFile, right: TableFile, leftKey: string, rightKey: string, parts: JoinParts) {
+  const rightCounts = new Map<string, number>();
+  let emptyRight = 0;
+  right.rows.forEach((row) => { const value = normalize(row[rightKey]); if (!value) { emptyRight++; return; } rightCounts.set(value, (rightCounts.get(value) ?? 0) + 1); });
+  const matchedKeys = new Set<string>();
+  let matched = 0; let leftOnly = 0;
+  left.rows.forEach((row) => { const value = normalize(row[leftKey]); const count = value ? rightCounts.get(value) ?? 0 : 0; if (count) { matched += count; matchedKeys.add(value); } else leftOnly++; });
+  let rightOnly = emptyRight;
+  rightCounts.forEach((count, value) => { if (!matchedKeys.has(value)) rightOnly += count; });
+  const outputRows = (parts.inner ? matched : 0) + (parts.leftOnly ? leftOnly : 0) + (parts.rightOnly ? rightOnly : 0);
+  return { matched, leftOnly, rightOnly, outputRows };
+}
+
+function getJoinHeaders(left: TableFile, right: TableFile) {
+  return [...left.headers, ...right.headers.map((header) => left.headers.includes(header) ? `${header}_droite` : header)];
 }
 
 export default function Home() {
@@ -163,8 +180,8 @@ export default function Home() {
   const visibleDuplicateRows = duplicateDisplayRows.slice(duplicatePage * duplicatePageSize, (duplicatePage + 1) * duplicatePageSize);
   useEffect(() => { setDuplicatePage(0); }, [files, keep, keys, mode]);
   useEffect(() => { if (mode === 'join' && files[0] && !leftKey) setLeftKey(files[0].headers[0] ?? ''); if (mode === 'join' && files[1] && !rightKey) { const common = files[1].headers.find((header) => header === leftKey); setRightKey(common ?? files[1].headers[0] ?? ''); } }, [files, leftKey, mode, rightKey]);
-  const joinPreview = useMemo(() => mode === 'join' && files.length === 2 && leftKey && rightKey ? createJoin(files[0], files[1], leftKey, rightKey, joinParts) : null, [files, joinParts, leftKey, mode, rightKey]);
-  const availableOutputColumns = useMemo(() => mode === 'join' ? joinPreview?.headers ?? [] : files[0]?.headers ?? [], [files, joinPreview, mode]);
+  const joinPreview = useMemo(() => mode === 'join' && files.length === 2 && leftKey && rightKey ? countJoin(files[0], files[1], leftKey, rightKey, joinParts) : null, [files, joinParts, leftKey, mode, rightKey]);
+  const availableOutputColumns = useMemo(() => mode === 'join' ? files.length === 2 ? getJoinHeaders(files[0], files[1]) : [] : files[0]?.headers ?? [], [files, mode]);
   const selectedOutputColumns = outputColumns ?? availableOutputColumns;
   const smartJoin = useMemo(() => mode === 'join' && files.length === 2 ? suggestJoinKeys(files[0], files[1]) : null, [files, mode]);
   useEffect(() => { setOutputColumns((current) => current?.filter((column) => availableOutputColumns.includes(column)) ?? null); }, [availableOutputColumns]);
@@ -195,6 +212,8 @@ export default function Home() {
     } else if (mode === 'join') {
       if (files.length !== 2 || !leftKey || !rightKey) { setMessage('Ajoutez deux fichiers et choisissez les deux clés de jointure.'); return; }
       if (!selectedOutputColumns.length) { setMessage('Sélectionnez au moins une colonne pour le fichier final.'); return; }
+      const estimate = countJoin(files[0], files[1], leftKey, rightKey, joinParts);
+      if (estimate.outputRows > 200000) { setMessage(`Cette jointure générerait ${estimate.outputRows.toLocaleString('fr-FR')} lignes. Choisissez des clés plus uniques ou réduisez les zones sélectionnées pour éviter de saturer la mémoire.`); return; }
       const result = createJoin(files[0], files[1], leftKey, rightKey, joinParts); saveWorkbook(selectColumns(result.rows, selectedOutputColumns), 'jointure_excel.xlsx', selectedOutputColumns); setMessage(`${result.rows.length.toLocaleString('fr-FR')} lignes générées par la jointure.`);
     } else if (mode === 'dedupe') {
       if (!keys.length) { setMessage('Sélectionnez au moins une colonne de comparaison.'); return; }
@@ -257,7 +276,7 @@ export default function Home() {
               <div className="joinPickerClean"><div className="vennDiagramClean" role="group" aria-label="Choisir les zones de la jointure"><span className="circleOutline circleA"></span><span className="circleOutline circleB"></span><button className={`joinZone zoneLeft ${joinParts.leftOnly ? 'active' : ''}`} aria-pressed={joinParts.leftOnly} aria-label="Lignes présentes uniquement dans A" onClick={() => toggleJoinPart('leftOnly')}><span>A</span></button><button className={`joinZone zoneMiddle ${joinParts.inner ? 'active' : ''}`} aria-pressed={joinParts.inner} aria-label="Correspondances entre A et B" onClick={() => toggleJoinPart('inner')}><span>∩</span></button><button className={`joinZone zoneRight ${joinParts.rightOnly ? 'active' : ''}`} aria-pressed={joinParts.rightOnly} aria-label="Lignes présentes uniquement dans B" onClick={() => toggleJoinPart('rightOnly')}><span>B</span></button></div><div className="zoneLegend"><span>A uniquement</span><span>Commun</span><span>B uniquement</span></div></div>
               <div className="joinPresets">{[{key:'100',label:'Externe gauche',parts:{leftOnly:true,inner:false,rightOnly:false}},{key:'010',label:'Interne',parts:{leftOnly:false,inner:true,rightOnly:false}},{key:'110',label:'Gauche + intersection',parts:{leftOnly:true,inner:true,rightOnly:false}},{key:'011',label:'Droite + intersection',parts:{leftOnly:false,inner:true,rightOnly:true}},{key:'001',label:'Externe droite',parts:{leftOnly:false,inner:false,rightOnly:true}},{key:'111',label:'Tout',parts:{leftOnly:true,inner:true,rightOnly:true}}].map((preset) => <button key={preset.key} className={joinPresetKey === preset.key ? 'active' : ''} onClick={() => setJoinParts(preset.parts)}>{joinPresetKey === preset.key ? '✓ ' : ''}{preset.label}</button>)}</div>
             </div>
-            {joinPreview && <div className="joinResult" aria-live="polite"><span className={joinParts.inner ? 'included' : 'excluded'}><strong>{joinPreview.matched.toLocaleString('fr-FR')}</strong> correspondances</span><span className={joinParts.leftOnly ? 'included' : 'excluded'}><strong>{joinPreview.leftOnly.toLocaleString('fr-FR')}</strong> A uniquement</span><span className={joinParts.rightOnly ? 'included' : 'excluded'}><strong>{joinPreview.rightOnly.toLocaleString('fr-FR')}</strong> B uniquement</span><span className="resultTotal"><strong>{joinPreview.rows.length.toLocaleString('fr-FR')}</strong> lignes en sortie</span></div>}
+            {joinPreview && <div className="joinResult" aria-live="polite"><span className={joinParts.inner ? 'included' : 'excluded'}><strong>{joinPreview.matched.toLocaleString('fr-FR')}</strong> correspondances</span><span className={joinParts.leftOnly ? 'included' : 'excluded'}><strong>{joinPreview.leftOnly.toLocaleString('fr-FR')}</strong> A uniquement</span><span className={joinParts.rightOnly ? 'included' : 'excluded'}><strong>{joinPreview.rightOnly.toLocaleString('fr-FR')}</strong> B uniquement</span><span className="resultTotal"><strong>{joinPreview.outputRows.toLocaleString('fr-FR')}</strong> lignes en sortie</span></div>}
           </div>}
           {mode === 'convert' && <div className="converter">
             {/\.csv$/i.test(files[0].name) && <div className="delimiterDetection"><span>✦</span><div><strong>Séparateur détecté automatiquement</strong><small>{csvDelimiter === ',' ? 'Virgule (,)' : csvDelimiter === ';' ? 'Point-virgule (;)' : csvDelimiter === '\t' ? 'Tabulation' : 'Barre verticale (|)'}</small></div><b>Détection intelligente</b></div>}
